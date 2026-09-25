@@ -38,17 +38,14 @@ function tokens(session: Session) {
 }
 
 export function registrationOpen() {
-  return process.env.ALLOW_REGISTRATION !== "false";
+  return false;
 }
 
 export function supabaseConfigured() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-export async function register(emailRaw: string, password: string) {
-  if (!registrationOpen()) {
-    throw new AccountError("Les inscriptions sont fermées", 403);
-  }
+export async function createAccount(emailRaw: string, password: string) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -70,7 +67,19 @@ export async function register(emailRaw: string, password: string) {
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return login(email, password);
+  return { email };
+}
+
+export async function listAccounts() {
+  const { data, error } = await client().auth.admin.listUsers({ perPage: 200 });
+  if (error) throw new AccountError(error.message, error.status || 500);
+  return data.users
+    .filter((user) => user.email)
+    .map((user) => ({
+      id: user.id,
+      email: user.email as string,
+      createdAt: user.created_at,
+    }));
 }
 
 export async function login(emailRaw: string, password: string) {
