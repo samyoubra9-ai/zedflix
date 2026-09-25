@@ -118,10 +118,21 @@ export async function listAccounts() {
         id: user.id,
         email: user.email as string,
         createdAt: user.created_at,
+        lastSignInAt: user.last_sign_in_at,
         expiresAt,
         expired,
+        deviceBound: Boolean(deviceIdOf(user.app_metadata)),
       };
-    });
+    })
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+export async function deleteAccount(id: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    throw new AccountError("Compte introuvable", 400);
+  }
+  const { error } = await client().auth.admin.deleteUser(id);
+  if (error) throw new AccountError(error.message, error.status || 400);
 }
 
 export async function login(emailRaw: string, password: string, deviceId: string) {
