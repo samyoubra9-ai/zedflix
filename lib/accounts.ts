@@ -45,7 +45,39 @@ export function supabaseConfigured() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-export async function createAccount(emailRaw: string, password: string) {
+const DURATIONS = [1, 3, 6, 12] as const;
+
+export function expirationDate(months: number) {
+  const date = new Date();
+  date.setMonth(date.getMonth() + months);
+  return date.toISOString();
+}
+
+function expiresAtOf(metadata: Record<string, unknown> | undefined) {
+  const value = metadata?.expires_at;
+  return typeof value === "string" ? value : null;
+}
+
+function assertActive(metadata: Record<string, unknown> | undefined) {
+  const expiresAt = expiresAtOf(metadata);
+  if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
+    throw new AccountError("Compte expiré", 403);
+  }
+}
+
+function deviceIdOf(metadata: Record<string, unknown> | undefined) {
+  const value = metadata?.device_id;
+  return typeof value === "string" ? value : null;
+}
+
+function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: string) {
+  const current = deviceIdOf(metadata);
+  if (current && current !== deviceId) {
+    throw new AccountError("Ce compte est utilisé sur un autre appareil", 401);
+  }
+}
+
+export async function createAccount(emailRaw: string, password: string, months = 1) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -53,12 +85,16 @@ export async function createAccount(emailRaw: string, password: string) {
   if (password.length < 8) {
     throw new AccountError("Le mot de passe doit faire au moins 8 caractères", 400);
   }
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
 
   const supabase = client();
   const { error } = await supabase.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
+    app_metadata: { expires_at: expirationDate(months) },
   });
   if (error) {
     const message = error.message.toLowerCase();
@@ -67,7 +103,7 @@ export async function createAccount(emailRaw: string, password: string) {
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email };
+  return { email, months };
 }
 
 export async function listAccounts() {
@@ -75,27 +111,52 @@ export async function listAccounts() {
   if (error) throw new AccountError(error.message, error.status || 500);
   return data.users
     .filter((user) => user.email)
-    .map((user) => ({
-      id: user.id,
-      email: user.email as string,
-      createdAt: user.created_at,
-    }));
+    .map((user) => {
+      const expiresAt = expiresAtOf(user.app_metadata);
+      const expired = Boolean(expiresAt && Date.parse(expiresAt) <= Date.now());
+      return {
+        id: user.id,
+        email: user.email as string,
+        createdAt: user.created_at,
+        expiresAt,
+        expired,
+      };
+    });
 }
 
-export async function login(emailRaw: string, password: string) {
+export async function login(emailRaw: string, password: string, deviceId: string) {
+  if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const email = emailRaw.trim().toLowerCase();
-  const { data, error } = await client().auth.signInWithPassword({ email, password });
+  const supabase = client();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.session) {
     throw new AccountError("Email ou mot de passe incorrect", 401);
   }
+  assertActive(data.session.user.app_metadata);
+  const { error: updateError } = await supabase.auth.admin.updateUserById(data.session.user.id, {
+    app_metadata: { ...data.session.user.app_metadata, device_id: deviceId },
+  });
+  if (updateError) throw new AccountError(updateError.message, 500);
+  await supabase.auth.admin.signOut(data.session.access_token, "others");
   return tokens(data.session);
 }
 
-export async function refresh(refreshToken: string) {
+export async function refresh(refreshToken: string, deviceId: string) {
   if (!refreshToken) throw new AccountError("Session expirée", 401);
   const { data, error } = await client().auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session) throw new AccountError("Session expirée", 401);
+  assertActive(data.session.user.app_metadata);
+  assertDevice(data.session.user.app_metadata, deviceId);
   return tokens(data.session);
+}
+
+export async function presence(accessToken: string, deviceId: string) {
+  if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
+  const { data, error } = await client().auth.getUser(accessToken);
+  if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
+  assertDevice(data.user.app_metadata, deviceId);
+  return { ok: true };
 }
 
 export async function accountFromRequest(request: Request): Promise<Account> {
@@ -104,6 +165,7 @@ export async function accountFromRequest(request: Request): Promise<Account> {
   if (!token) throw new AccountError("Connexion requise", 401);
   const { data, error } = await client().auth.getUser(token);
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
   return { id: data.user.id, email: data.user.email };
 }
 

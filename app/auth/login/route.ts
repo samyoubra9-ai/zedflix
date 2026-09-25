@@ -7,7 +7,9 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const body = await readJson(request);
-    return NextResponse.json(await login(String(body.email || ""), String(body.password || "")));
+    return NextResponse.json(
+      await login(String(body.email || ""), String(body.password || ""), String(body.deviceId || "")),
+    );
   } catch (error) {
     return fail(error);
   }
