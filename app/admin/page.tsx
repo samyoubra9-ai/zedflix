@@ -10,6 +10,7 @@ type AccountRow = {
   expiresAt: string | null;
   expired: boolean;
   deviceBound: boolean;
+  adult: boolean;
 };
 
 type View = "overview" | "accounts" | "create";
@@ -17,7 +18,8 @@ type View = "overview" | "accounts" | "create";
 type Dialog =
   | { kind: "delete"; user: AccountRow }
   | { kind: "extend"; user: AccountRow }
-  | { kind: "release"; user: AccountRow };
+  | { kind: "release"; user: AccountRow }
+  | { kind: "edit"; user: AccountRow };
 
 const DURATIONS = [
   { months: 1, label: "1 mois" },
@@ -28,7 +30,7 @@ const DURATIONS = [
 
 const NAV: { id: View; label: string; hint: string }[] = [
   { id: "overview", label: "Vue d’ensemble", hint: "Activité des comptes" },
-  { id: "accounts", label: "Comptes", hint: "Prolonger, délier, supprimer" },
+  { id: "accounts", label: "Comptes", hint: "Modifier, prolonger, délier" },
   { id: "create", label: "Nouveau compte", hint: "Créer un accès" },
 ];
 
@@ -53,6 +55,8 @@ export default function AdminPage() {
   const [email, setEmail] = useState("");
   const [userPassword, setUserPassword] = useState("");
   const [months, setMonths] = useState(1);
+  const [adult, setAdult] = useState(false);
+  const [editAdult, setEditAdult] = useState(false);
   const [users, setUsers] = useState<AccountRow[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -134,7 +138,7 @@ export default function AdminPage() {
     const response = await fetch("/admin/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: userPassword, months }),
+      body: JSON.stringify({ email, password: userPassword, months, adult }),
     });
     const body = await response.json();
     if (!response.ok) {
@@ -144,7 +148,8 @@ export default function AdminPage() {
     setEmail("");
     setUserPassword("");
     setMonths(1);
-    setNotice(`Compte créé pour ${body.email}`);
+    setAdult(false);
+    setNotice(body.adult ? `Compte créé pour ${body.email}, avec le contenu adulte` : `Compte créé pour ${body.email}`);
     await loadUsers();
     setView("accounts");
   }
@@ -205,6 +210,31 @@ export default function AdminPage() {
       return;
     }
     setNotice(`Appareil délié pour ${dialog.user.email}`);
+    setDialog(null);
+    await loadUsers();
+  }
+
+  async function saveAdult() {
+    if (dialog?.kind !== "edit") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const response = await fetch(`/admin/users/${dialog.user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ adult: editAdult }),
+    });
+    const body = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setError(body.error || "Modification impossible");
+      return;
+    }
+    setNotice(
+      body.adult
+        ? `${dialog.user.email} a maintenant le contenu adulte`
+        : `Contenu adulte retiré pour ${dialog.user.email}`,
+    );
     setDialog(null);
     await loadUsers();
   }
@@ -394,6 +424,7 @@ export default function AdminPage() {
                       <th className="px-4 py-3 font-medium">Créé</th>
                       <th className="px-4 py-3 font-medium">Expire</th>
                       <th className="px-4 py-3 font-medium">Appareil</th>
+                      <th className="px-4 py-3 font-medium">Adulte</th>
                       <th className="px-4 py-3 font-medium">État</th>
                       <th className="px-4 py-3 font-medium" />
                     </tr>
@@ -411,6 +442,15 @@ export default function AdminPage() {
                         <td className="px-4 py-3">
                           <span
                             className={`rounded-full px-2 py-1 text-xs ${
+                              user.adult ? "bg-red-950 text-red-300" : "bg-white/5 text-zinc-400"
+                            }`}
+                          >
+                            {user.adult ? "Oui" : "Non"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`rounded-full px-2 py-1 text-xs ${
                               user.expired ? "bg-red-950 text-red-300" : "bg-green-950 text-green-300"
                             }`}
                           >
@@ -419,6 +459,16 @@ export default function AdminPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditAdult(user.adult);
+                                setDialog({ kind: "edit", user });
+                              }}
+                              className="rounded-lg border border-white/15 px-3 py-2 hover:bg-white/10"
+                            >
+                              Modifier
+                            </button>
                             <button
                               type="button"
                               onClick={() => {
@@ -450,7 +500,7 @@ export default function AdminPage() {
                     ))}
                     {visible.length === 0 ? (
                       <tr>
-                        <td className="px-4 py-8 text-zinc-500" colSpan={6}>
+                        <td className="px-4 py-8 text-zinc-500" colSpan={7}>
                           Aucun compte ne correspond.
                         </td>
                       </tr>
@@ -486,6 +536,18 @@ export default function AdminPage() {
                   className={`${fieldClass()} mt-2`}
                 />
               </label>
+              <label className="mt-4 flex items-center gap-3 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={adult}
+                  onChange={(event) => setAdult(event.target.checked)}
+                  className="h-4 w-4 accent-red-600"
+                />
+                Contenu adulte
+              </label>
+              <p className="mt-1 text-xs text-zinc-500">
+                Décoché, le compte ne voit que les films, les séries et l’anime.
+              </p>
               <label className="mt-4 block text-sm text-zinc-400">
                 Durée
                 <select
@@ -538,6 +600,24 @@ export default function AdminPage() {
                 </select>
               </>
             ) : null}
+            {dialog.kind === "edit" ? (
+              <>
+                <h2 className="text-lg font-semibold">Modifier {dialog.user.email}</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  Le contenu adulte apparaît dans l’application seulement si cette case est cochée. Les comptes déjà
+                  créés se règlent ici.
+                </p>
+                <label className="mt-4 flex items-center gap-3 text-sm text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={editAdult}
+                    onChange={(event) => setEditAdult(event.target.checked)}
+                    className="h-4 w-4 accent-red-600"
+                  />
+                  Contenu adulte
+                </label>
+              </>
+            ) : null}
             {dialog.kind === "release" ? (
               <>
                 <h2 className="text-lg font-semibold">Délier l’appareil ?</h2>
@@ -557,7 +637,15 @@ export default function AdminPage() {
               </button>
               <button
                 type="button"
-                onClick={dialog.kind === "delete" ? removeUser : dialog.kind === "extend" ? extendUser : releaseUser}
+                onClick={
+                  dialog.kind === "delete"
+                    ? removeUser
+                    : dialog.kind === "extend"
+                      ? extendUser
+                      : dialog.kind === "edit"
+                        ? saveAdult
+                        : releaseUser
+                }
                 disabled={busy}
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-60"
               >
@@ -565,8 +653,10 @@ export default function AdminPage() {
                   ? "En cours…"
                   : dialog.kind === "delete"
                     ? "Supprimer"
-                    : dialog.kind === "extend"
-                      ? "Prolonger"
+                  : dialog.kind === "extend"
+                    ? "Prolonger"
+                    : dialog.kind === "edit"
+                      ? "Enregistrer"
                       : "Délier"}
               </button>
             </div>

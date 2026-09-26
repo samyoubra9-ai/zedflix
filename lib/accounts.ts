@@ -34,6 +34,7 @@ function tokens(session: Session) {
     accessToken: session.access_token,
     refreshToken: session.refresh_token,
     email,
+    adult: adultOf(session.user.app_metadata),
   };
 }
 
@@ -70,6 +71,14 @@ function deviceIdOf(metadata: Record<string, unknown> | undefined) {
   return typeof value === "string" ? value : null;
 }
 
+export function adultOf(metadata: Record<string, unknown> | undefined) {
+  return metadata?.adult === true;
+}
+
+function keptMetadata(metadata: Record<string, unknown> | undefined, patch: Record<string, unknown>) {
+  return { ...(metadata || {}), ...patch };
+}
+
 function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: string) {
   const current = deviceIdOf(metadata);
   if (current && current !== deviceId) {
@@ -77,7 +86,7 @@ function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: s
   }
 }
 
-export async function createAccount(emailRaw: string, password: string, months = 1) {
+export async function createAccount(emailRaw: string, password: string, months = 1, adult = false) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -94,7 +103,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     email,
     password,
     email_confirm: true,
-    app_metadata: { expires_at: expirationDate(months) },
+    app_metadata: { expires_at: expirationDate(months), adult: adult === true },
   });
   if (error) {
     const message = error.message.toLowerCase();
@@ -103,7 +112,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email, months };
+  return { email, months, adult: adult === true };
 }
 
 export async function listAccounts() {
@@ -122,6 +131,7 @@ export async function listAccounts() {
         expiresAt,
         expired,
         deviceBound: Boolean(deviceIdOf(user.app_metadata)),
+        adult: adultOf(user.app_metadata),
       };
     })
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -152,7 +162,7 @@ export async function extendAccount(id: string, months: number) {
   base.setMonth(base.getMonth() + months);
   const expiresAt = base.toISOString();
   const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
-    app_metadata: { expires_at: expiresAt },
+    app_metadata: keptMetadata(data.user.app_metadata, { expires_at: expiresAt }),
   });
   if (updateError) throw new AccountError(updateError.message, 400);
   return { email: data.user.email, expiresAt, months };
@@ -164,7 +174,7 @@ export async function releaseDevice(id: string) {
   const { data, error } = await supabase.auth.admin.getUserById(id);
   if (error || !data.user) throw new AccountError("Compte introuvable", 404);
   const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
-    app_metadata: { device_id: null },
+    app_metadata: keptMetadata(data.user.app_metadata, { device_id: null }),
   });
   if (updateError) throw new AccountError(updateError.message, 400);
   const url = process.env.SUPABASE_URL;
@@ -210,7 +220,20 @@ export async function presence(accessToken: string, deviceId: string) {
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
   assertActive(data.user.app_metadata);
   assertDevice(data.user.app_metadata, deviceId);
-  return { ok: true };
+  return { ok: true, adult: adultOf(data.user.app_metadata) };
+}
+
+export async function setAdult(id: string, adult: boolean) {
+  assertUserId(id);
+  const supabase = client();
+  const { data, error } = await supabase.auth.admin.getUserById(id);
+  if (error || !data.user) throw new AccountError("Compte introuvable", 404);
+  const enabled = adult === true;
+  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
+    app_metadata: keptMetadata(data.user.app_metadata, { adult: enabled }),
+  });
+  if (updateError) throw new AccountError(updateError.message, 400);
+  return { email: data.user.email, adult: enabled };
 }
 
 export async function accountFromRequest(request: Request): Promise<Account> {
