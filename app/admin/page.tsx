@@ -478,7 +478,7 @@ export default function AdminPage() {
               <label className="mt-4 block text-sm text-zinc-400">
                 Mot de passe
                 <input
-                  type="text"
+                  type="password"
                   required
                   minLength={8}
                   value={userPassword}

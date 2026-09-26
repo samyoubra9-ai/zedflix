@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { AccountError } from "./accounts";
 
-export const ADMIN_COOKIE = "zedflix_admin";
+export const ADMIN_COOKIE = "minuit_admin";
 
 export function adminConfigured() {
   return (process.env.ADMIN_PASSWORD || "").length >= 8;
@@ -9,7 +9,7 @@ export function adminConfigured() {
 
 export function adminToken() {
   const password = process.env.ADMIN_PASSWORD || "";
-  return createHmac("sha256", password).update("zedflix-admin").digest("hex");
+  return createHmac("sha256", password).update("minuit-admin").digest("hex");
 }
 
 export function isAdmin(request: Request) {

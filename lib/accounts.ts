@@ -1,4 +1,4 @@
-import { createClient, type Session } from "@supabase/supabase-js";
+import { createClient, type Session, type User } from "@supabase/supabase-js";
 
 export class AccountError extends Error {
   constructor(
@@ -113,9 +113,16 @@ export async function createAccount(emailRaw: string, password: string, months =
 }
 
 export async function listAccounts() {
-  const { data, error } = await client().auth.admin.listUsers({ perPage: 200 });
-  if (error) throw new AccountError(error.message, error.status || 500);
-  return data.users
+  const supabase = client();
+  const users: User[] = [];
+  let page: number | null = 1;
+  while (page) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) throw new AccountError(error.message, error.status || 500);
+    users.push(...data.users);
+    page = data.nextPage;
+  }
+  return users
     .filter((user) => user.email)
     .map((user) => {
       const expiresAt = expiresAtOf(user.app_metadata);
