@@ -14,6 +14,11 @@ type AccountRow = {
 
 type View = "overview" | "accounts" | "create";
 
+type Dialog =
+  | { kind: "delete"; user: AccountRow }
+  | { kind: "extend"; user: AccountRow }
+  | { kind: "release"; user: AccountRow };
+
 const DURATIONS = [
   { months: 1, label: "1 mois" },
   { months: 3, label: "3 mois" },
@@ -23,7 +28,7 @@ const DURATIONS = [
 
 const NAV: { id: View; label: string; hint: string }[] = [
   { id: "overview", label: "Vue d’ensemble", hint: "Activité des comptes" },
-  { id: "accounts", label: "Comptes", hint: "Liste et suppression" },
+  { id: "accounts", label: "Comptes", hint: "Prolonger, délier, supprimer" },
   { id: "create", label: "Nouveau compte", hint: "Créer un accès" },
 ];
 
@@ -55,8 +60,9 @@ export default function AdminPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "expired">("all");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [pending, setPending] = useState<AccountRow | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [extendMonths, setExtendMonths] = useState(1);
+  const [busy, setBusy] = useState(false);
 
   const active = users.filter((user) => !user.expired).length;
   const expired = users.length - active;
@@ -144,19 +150,62 @@ export default function AdminPage() {
   }
 
   async function removeUser() {
-    if (!pending) return;
-    setDeleting(true);
+    if (dialog?.kind !== "delete") return;
+    setBusy(true);
     setError("");
     setNotice("");
-    const response = await fetch(`/admin/users/${pending.id}`, { method: "DELETE" });
+    const response = await fetch(`/admin/users/${dialog.user.id}`, { method: "DELETE" });
     const body = await response.json().catch(() => ({}));
-    setDeleting(false);
+    setBusy(false);
     if (!response.ok) {
       setError(body.error || "Suppression impossible");
       return;
     }
-    setNotice(`Compte supprimé : ${pending.email}`);
-    setPending(null);
+    setNotice(`Compte supprimé : ${dialog.user.email}`);
+    setDialog(null);
+    await loadUsers();
+  }
+
+  async function extendUser() {
+    if (dialog?.kind !== "extend") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const response = await fetch(`/admin/users/${dialog.user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ months: extendMonths }),
+    });
+    const body = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setError(body.error || "Prolongation impossible");
+      return;
+    }
+    setNotice(`Compte prolongé jusqu’au ${formatDate(body.expiresAt)}`);
+    setDialog(null);
+    setExtendMonths(1);
+    await loadUsers();
+  }
+
+  async function releaseUser() {
+    if (dialog?.kind !== "release") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const response = await fetch(`/admin/users/${dialog.user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ releaseDevice: true }),
+    });
+    const body = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setError(body.error || "Impossible de délier l’appareil");
+      return;
+    }
+    setNotice(`Appareil délié pour ${dialog.user.email}`);
+    setDialog(null);
     await loadUsers();
   }
 
@@ -174,7 +223,7 @@ export default function AdminPage() {
     return (
       <main className="grid min-h-screen place-items-center bg-[#070707] px-6 text-white">
         <form onSubmit={signIn} className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950 p-6">
-          <p className="text-sm font-semibold tracking-[0.2em] text-red-600">ZEDFLIX</p>
+          <p className="text-sm font-semibold tracking-[0.2em] text-red-600">MINUIT</p>
           <h1 className="mt-3 text-2xl font-semibold">Administration</h1>
           <p className="mt-2 text-sm text-zinc-400">Entre le mot de passe pour ouvrir le tableau de bord.</p>
           <input
@@ -212,7 +261,7 @@ export default function AdminPage() {
         } md:translate-x-0`}
       >
         <div className="border-b border-white/10 px-5 py-6">
-          <p className="text-sm font-semibold tracking-[0.22em] text-red-600">ZEDFLIX</p>
+          <p className="text-sm font-semibold tracking-[0.22em] text-red-600">MINUIT</p>
           <p className="mt-1 text-sm text-zinc-400">Tableau de bord</p>
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
@@ -338,7 +387,7 @@ export default function AdminPage() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left text-sm">
+                <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="text-zinc-500">
                     <tr>
                       <th className="px-4 py-3 font-medium">Email</th>
@@ -368,14 +417,34 @@ export default function AdminPage() {
                             {user.expired ? "Expiré" : "Actif"}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setPending(user)}
-                            className="rounded-lg border border-red-900 px-3 py-2 text-red-300 hover:bg-red-950"
-                          >
-                            Supprimer
-                          </button>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExtendMonths(1);
+                                setDialog({ kind: "extend", user });
+                              }}
+                              className="rounded-lg border border-white/15 px-3 py-2 hover:bg-white/10"
+                            >
+                              Prolonger
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!user.deviceBound}
+                              onClick={() => setDialog({ kind: "release", user })}
+                              className="rounded-lg border border-white/15 px-3 py-2 hover:bg-white/10 disabled:cursor-default disabled:opacity-40"
+                            >
+                              Délier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDialog({ kind: "delete", user })}
+                              className="rounded-lg border border-red-900 px-3 py-2 text-red-300 hover:bg-red-950"
+                            >
+                              Supprimer
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -439,29 +508,66 @@ export default function AdminPage() {
         </main>
       </div>
 
-      {pending ? (
+      {dialog ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 px-6">
           <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6">
-            <h2 className="text-lg font-semibold">Supprimer ce compte ?</h2>
-            <p className="mt-2 text-sm text-zinc-400">
-              {pending.email} perd l’accès immédiatement. Cette action est définitive.
-            </p>
+            {dialog.kind === "delete" ? (
+              <>
+                <h2 className="text-lg font-semibold">Supprimer ce compte ?</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  {dialog.user.email} perd l’accès immédiatement. Cette action est définitive.
+                </p>
+              </>
+            ) : null}
+            {dialog.kind === "extend" ? (
+              <>
+                <h2 className="text-lg font-semibold">Prolonger {dialog.user.email}</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  Le temps restant est conservé. Si le compte est déjà expiré, la nouvelle durée part d’aujourd’hui.
+                </p>
+                <select
+                  value={extendMonths}
+                  onChange={(event) => setExtendMonths(Number(event.target.value))}
+                  className={`${fieldClass()} mt-4`}
+                >
+                  {DURATIONS.map((duration) => (
+                    <option key={duration.months} value={duration.months}>
+                      {duration.label}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
+            {dialog.kind === "release" ? (
+              <>
+                <h2 className="text-lg font-semibold">Délier l’appareil ?</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  {dialog.user.email} pourra se connecter sur un nouveau téléphone. L’ancien sera déconnecté.
+                </p>
+              </>
+            ) : null}
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setPending(null)}
-                disabled={deleting}
+                onClick={() => setDialog(null)}
+                disabled={busy}
                 className="rounded-lg px-4 py-2 text-sm text-zinc-300"
               >
                 Annuler
               </button>
               <button
                 type="button"
-                onClick={removeUser}
-                disabled={deleting}
+                onClick={dialog.kind === "delete" ? removeUser : dialog.kind === "extend" ? extendUser : releaseUser}
+                disabled={busy}
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-60"
               >
-                {deleting ? "Suppression…" : "Supprimer"}
+                {busy
+                  ? "En cours…"
+                  : dialog.kind === "delete"
+                    ? "Supprimer"
+                    : dialog.kind === "extend"
+                      ? "Prolonger"
+                      : "Délier"}
               </button>
             </div>
           </div>

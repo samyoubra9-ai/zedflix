@@ -127,12 +127,55 @@ export async function listAccounts() {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-export async function deleteAccount(id: string) {
+function assertUserId(id: string) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) {
     throw new AccountError("Compte introuvable", 400);
   }
+}
+
+export async function deleteAccount(id: string) {
+  assertUserId(id);
   const { error } = await client().auth.admin.deleteUser(id);
   if (error) throw new AccountError(error.message, error.status || 400);
+}
+
+export async function extendAccount(id: string, months: number) {
+  assertUserId(id);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
+  const supabase = client();
+  const { data, error } = await supabase.auth.admin.getUserById(id);
+  if (error || !data.user) throw new AccountError("Compte introuvable", 404);
+  const current = expiresAtOf(data.user.app_metadata);
+  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
+  base.setMonth(base.getMonth() + months);
+  const expiresAt = base.toISOString();
+  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
+    app_metadata: { expires_at: expiresAt },
+  });
+  if (updateError) throw new AccountError(updateError.message, 400);
+  return { email: data.user.email, expiresAt, months };
+}
+
+export async function releaseDevice(id: string) {
+  assertUserId(id);
+  const supabase = client();
+  const { data, error } = await supabase.auth.admin.getUserById(id);
+  if (error || !data.user) throw new AccountError("Compte introuvable", 404);
+  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
+    app_metadata: { device_id: null },
+  });
+  if (updateError) throw new AccountError(updateError.message, 400);
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (url && key) {
+    await fetch(`${url.replace(/\/$/, "")}/auth/v1/admin/users/${id}/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, apikey: key },
+    }).catch(() => undefined);
+  }
+  return { email: data.user.email };
 }
 
 export async function login(emailRaw: string, password: string, deviceId: string) {
