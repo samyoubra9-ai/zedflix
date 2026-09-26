@@ -19,12 +19,7 @@ export async function POST(request: Request) {
     requireAdmin(request);
     const body = await readJson(request);
     const months = Number(body.months || 1);
-    const account = await createAccount(
-      String(body.email || ""),
-      String(body.password || ""),
-      months,
-      body.adult === true,
-    );
+    const account = await createAccount(String(body.email || ""), String(body.password || ""), months);
     return NextResponse.json(account, { status: 201 });
   } catch (error) {
     return fail(error);

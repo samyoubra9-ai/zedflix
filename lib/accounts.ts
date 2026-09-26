@@ -34,7 +34,6 @@ function tokens(session: Session) {
     accessToken: session.access_token,
     refreshToken: session.refresh_token,
     email,
-    adult: adultOf(session.user.app_metadata),
   };
 }
 
@@ -71,12 +70,10 @@ function deviceIdOf(metadata: Record<string, unknown> | undefined) {
   return typeof value === "string" ? value : null;
 }
 
-export function adultOf(metadata: Record<string, unknown> | undefined) {
-  return metadata?.adult === true;
-}
-
 function keptMetadata(metadata: Record<string, unknown> | undefined, patch: Record<string, unknown>) {
-  return { ...(metadata || {}), ...patch };
+  const next = { ...(metadata || {}), ...patch };
+  delete next.adult;
+  return next;
 }
 
 function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: string) {
@@ -86,7 +83,7 @@ function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: s
   }
 }
 
-export async function createAccount(emailRaw: string, password: string, months = 1, adult = false) {
+export async function createAccount(emailRaw: string, password: string, months = 1) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -103,7 +100,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     email,
     password,
     email_confirm: true,
-    app_metadata: { expires_at: expirationDate(months), adult: adult === true },
+    app_metadata: { expires_at: expirationDate(months) },
   });
   if (error) {
     const message = error.message.toLowerCase();
@@ -112,7 +109,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email, months, adult: adult === true };
+  return { email, months };
 }
 
 export async function listAccounts() {
@@ -131,7 +128,6 @@ export async function listAccounts() {
         expiresAt,
         expired,
         deviceBound: Boolean(deviceIdOf(user.app_metadata)),
-        adult: adultOf(user.app_metadata),
       };
     })
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -198,7 +194,7 @@ export async function login(emailRaw: string, password: string, deviceId: string
   }
   assertActive(data.session.user.app_metadata);
   const { error: updateError } = await supabase.auth.admin.updateUserById(data.session.user.id, {
-    app_metadata: { ...data.session.user.app_metadata, device_id: deviceId },
+    app_metadata: keptMetadata(data.session.user.app_metadata, { device_id: deviceId }),
   });
   if (updateError) throw new AccountError(updateError.message, 500);
   await supabase.auth.admin.signOut(data.session.access_token, "others");
@@ -220,20 +216,7 @@ export async function presence(accessToken: string, deviceId: string) {
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
   assertActive(data.user.app_metadata);
   assertDevice(data.user.app_metadata, deviceId);
-  return { ok: true, adult: adultOf(data.user.app_metadata) };
-}
-
-export async function setAdult(id: string, adult: boolean) {
-  assertUserId(id);
-  const supabase = client();
-  const { data, error } = await supabase.auth.admin.getUserById(id);
-  if (error || !data.user) throw new AccountError("Compte introuvable", 404);
-  const enabled = adult === true;
-  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
-    app_metadata: keptMetadata(data.user.app_metadata, { adult: enabled }),
-  });
-  if (updateError) throw new AccountError(updateError.message, 400);
-  return { email: data.user.email, adult: enabled };
+  return { ok: true };
 }
 
 export async function accountFromRequest(request: Request): Promise<Account> {
