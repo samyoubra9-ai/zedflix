@@ -238,6 +238,10 @@ export async function accountFromRequest(request: Request): Promise<Account> {
 
 const PROFILE_COLORS = [-1767148, -4711132, -14725511, -13669553, -10732178];
 
+function validPin(pin: string) {
+  return pin === "" || /^\d{4}$/.test(pin);
+}
+
 export type StoredProfile = {
   id: string;
   name: string;
@@ -255,7 +259,7 @@ function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfil
     const name = String(profile.name || "").trim();
     const pin = String(profile.pin || "");
     const color = Number(profile.color);
-    if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !/^\d{4}$/.test(pin)) return [];
+    if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !validPin(pin)) return [];
     return [{ id, name: name.slice(0, 18), pin, color: Number.isFinite(color) ? color : PROFILE_COLORS[0] }];
   }).slice(0, 5);
 }
@@ -290,7 +294,7 @@ export async function createProfile(
   color?: number,
 ) {
   const name = nameRaw.trim();
-  if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Profil invalide", 400);
+  if (!name || !validPin(pin)) throw new AccountError("Profil invalide", 400);
   const user = await userFromToken(accessToken, deviceId);
   const current = profilesOf(user.app_metadata);
   if (current.length >= 5) throw new AccountError("5 profils maximum", 400);
@@ -316,7 +320,7 @@ export async function updateProfile(
   pin: string,
 ) {
   const name = nameRaw.trim();
-  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !/^\d{4}$/.test(pin)) {
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !validPin(pin)) {
     throw new AccountError("Profil invalide", 400);
   }
   const user = await userFromToken(accessToken, deviceId);
