@@ -14,6 +14,10 @@ export type Account = {
   email: string;
 };
 
+export function admin() {
+  return client();
+}
+
 function client() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -76,11 +80,38 @@ function keptMetadata(metadata: Record<string, unknown> | undefined, patch: Reco
   return next;
 }
 
-function assertDevice(metadata: Record<string, unknown> | undefined, deviceId: string) {
-  const current = deviceIdOf(metadata);
-  if (current && current !== deviceId) {
-    throw new AccountError("Ce compte est utilisé sur un autre appareil", 401);
+const PROFILE_SEATS = 2;
+
+type ProfileSeat = { deviceId: string; at: number };
+
+function seatsOf(metadata: Record<string, unknown> | undefined): Record<string, ProfileSeat[]> {
+  const value = metadata?.profile_seats;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const seats: Record<string, ProfileSeat[]> = {};
+  for (const [profileId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId) || !Array.isArray(raw)) continue;
+    const list = raw
+      .flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const seat = item as Record<string, unknown>;
+        const deviceId = String(seat.deviceId || "").trim();
+        const at = Number(seat.at);
+        if (!deviceId || deviceId.length > 80 || !Number.isFinite(at)) return [];
+        return [{ deviceId, at }];
+      })
+      .sort((a, b) => a.at - b.at)
+      .slice(-PROFILE_SEATS);
+    if (list.length) seats[profileId] = list;
   }
+  return seats;
+}
+
+function seatCount(metadata: Record<string, unknown> | undefined) {
+  return Object.values(seatsOf(metadata)).reduce((total, list) => total + list.length, 0);
+}
+
+function holdsSeat(metadata: Record<string, unknown> | undefined, profileId: string, deviceId: string) {
+  return (seatsOf(metadata)[profileId] || []).some((seat) => seat.deviceId === deviceId);
 }
 
 export async function createAccount(emailRaw: string, password: string, months = 1) {
@@ -134,7 +165,7 @@ export async function listAccounts() {
         lastSignInAt: user.last_sign_in_at,
         expiresAt,
         expired,
-        deviceBound: Boolean(deviceIdOf(user.app_metadata)),
+        deviceBound: Boolean(deviceIdOf(user.app_metadata)) || seatCount(user.app_metadata) > 0,
       };
     })
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -177,7 +208,7 @@ export async function releaseDevice(id: string) {
   const { data, error } = await supabase.auth.admin.getUserById(id);
   if (error || !data.user) throw new AccountError("Compte introuvable", 404);
   const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
-    app_metadata: keptMetadata(data.user.app_metadata, { device_id: null }),
+    app_metadata: keptMetadata(data.user.app_metadata, { device_id: null, profile_seats: {} }),
   });
   if (updateError) throw new AccountError(updateError.message, 400);
   const url = process.env.SUPABASE_URL;
@@ -200,30 +231,28 @@ export async function login(emailRaw: string, password: string, deviceId: string
     throw new AccountError("Email ou mot de passe incorrect", 401);
   }
   assertActive(data.session.user.app_metadata);
-  const { error: updateError } = await supabase.auth.admin.updateUserById(data.session.user.id, {
-    app_metadata: keptMetadata(data.session.user.app_metadata, { device_id: deviceId }),
-  });
-  if (updateError) throw new AccountError(updateError.message, 500);
-  await supabase.auth.admin.signOut(data.session.access_token, "others");
   return tokens(data.session);
 }
 
 export async function refresh(refreshToken: string, deviceId: string) {
+  if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   if (!refreshToken) throw new AccountError("Session expirée", 401);
   const { data, error } = await client().auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session) throw new AccountError("Session expirée", 401);
   assertActive(data.session.user.app_metadata);
-  assertDevice(data.session.user.app_metadata, deviceId);
   return tokens(data.session);
 }
 
-export async function presence(accessToken: string, deviceId: string) {
+export async function presence(accessToken: string, deviceId: string, profileId = "") {
   if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
   assertActive(data.user.app_metadata);
-  assertDevice(data.user.app_metadata, deviceId);
-  return { ok: true };
+  const watching = /^[a-zA-Z0-9]{4,40}$/.test(profileId);
+  return {
+    ok: true,
+    profile: !watching || holdsSeat(data.user.app_metadata, profileId, deviceId),
+  };
 }
 
 export async function accountFromRequest(request: Request): Promise<Account> {
@@ -264,20 +293,65 @@ function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfil
   }).slice(0, 5);
 }
 
-async function userFromToken(accessToken: string, deviceId: string) {
+export async function userFromToken(accessToken: string, deviceId: string) {
   if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user) throw new AccountError("Session expirée", 401);
   assertActive(data.user.app_metadata);
-  assertDevice(data.user.app_metadata, deviceId);
   return data.user;
 }
 
-async function saveProfiles(userId: string, metadata: Record<string, unknown> | undefined, profiles: StoredProfile[]) {
+async function saveProfiles(
+  userId: string,
+  metadata: Record<string, unknown> | undefined,
+  profiles: StoredProfile[],
+  extra: Record<string, unknown> = {},
+) {
   const { error } = await client().auth.admin.updateUserById(userId, {
-    app_metadata: keptMetadata(metadata, { profiles }),
+    app_metadata: keptMetadata(metadata, { profiles, ...extra }),
   });
   if (error) throw new AccountError(error.message, 400);
+}
+
+async function saveSeats(userId: string, metadata: Record<string, unknown> | undefined, seats: Record<string, ProfileSeat[]>) {
+  const { error } = await client().auth.admin.updateUserById(userId, {
+    app_metadata: keptMetadata(metadata, { profile_seats: seats }),
+  });
+  if (error) throw new AccountError(error.message, 400);
+}
+
+export async function claimProfile(accessToken: string, deviceId: string, profileId: string) {
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
+  const user = await userFromToken(accessToken, deviceId);
+  if (!profilesOf(user.app_metadata).some((profile) => profile.id === profileId)) {
+    throw new AccountError("Profil introuvable", 404);
+  }
+  const seats = seatsOf(user.app_metadata);
+  for (const id of Object.keys(seats)) {
+    seats[id] = seats[id].filter((seat) => seat.deviceId !== deviceId);
+    if (!seats[id].length) delete seats[id];
+  }
+  const list = seats[profileId] || [];
+  list.push({ deviceId, at: Date.now() });
+  list.sort((a, b) => a.at - b.at);
+  while (list.length > PROFILE_SEATS) list.shift();
+  seats[profileId] = list;
+  await saveSeats(user.id, user.app_metadata, seats);
+  return { ok: true };
+}
+
+export async function releaseSeats(accessToken: string, deviceId: string) {
+  const user = await userFromToken(accessToken, deviceId);
+  const seats = seatsOf(user.app_metadata);
+  let changed = false;
+  for (const id of Object.keys(seats)) {
+    const next = seats[id].filter((seat) => seat.deviceId !== deviceId);
+    if (next.length !== seats[id].length) changed = true;
+    if (next.length) seats[id] = next;
+    else delete seats[id];
+  }
+  if (changed) await saveSeats(user.id, user.app_metadata, seats);
+  return { ok: true };
 }
 
 export async function listProfiles(accessToken: string, deviceId: string) {
@@ -286,62 +360,106 @@ export async function listProfiles(accessToken: string, deviceId: string) {
 }
 
 export async function createProfile(
-  accessToken: string,
-  deviceId: string,
-  nameRaw: string,
-  pin: string,
-  idRaw = "",
-  color?: number,
+  _accessToken: string,
+  _deviceId: string,
+  _nameRaw: string,
+  _pin: string,
+  _idRaw = "",
+  _color?: number,
 ) {
-  const name = nameRaw.trim();
-  if (!name || !validPin(pin)) throw new AccountError("Profil invalide", 400);
-  const user = await userFromToken(accessToken, deviceId);
-  const current = profilesOf(user.app_metadata);
-  if (current.length >= 5) throw new AccountError("5 profils maximum", 400);
-  const requested = idRaw.trim();
-  const id = /^[a-zA-Z0-9]{4,40}$/.test(requested) && !current.some((profile) => profile.id === requested)
-    ? requested
-    : crypto.randomUUID().replace(/-/g, "");
-  const profile: StoredProfile = {
-    id,
-    name: name.slice(0, 18),
-    pin,
-    color: Number.isFinite(color) ? Number(color) : PROFILE_COLORS[current.length % PROFILE_COLORS.length],
-  };
-  await saveProfiles(user.id, user.app_metadata, [...current, profile]);
-  return profile;
+  throw new AccountError("Seul l'admin peut créer un profil", 403);
 }
 
 export async function updateProfile(
   accessToken: string,
   deviceId: string,
   id: string,
-  nameRaw: string,
-  pin: string,
+  currentPin: string,
+  newPin: string,
 ) {
-  const name = nameRaw.trim();
-  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !validPin(pin)) {
-    throw new AccountError("Profil invalide", 400);
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !/^\d{4}$/.test(newPin)) {
+    throw new AccountError("Code à 4 chiffres requis", 400);
   }
   const user = await userFromToken(accessToken, deviceId);
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === id);
   if (!existing) throw new AccountError("Profil introuvable", 404);
-  const profile = { ...existing, name: name.slice(0, 18), pin };
+  if (existing.pin && existing.pin !== currentPin) throw new AccountError("Code incorrect", 403);
+  const profile = { ...existing, pin: newPin };
   await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
   return profile;
 }
 
-export async function deleteProfile(accessToken: string, deviceId: string, id: string) {
-  if (!/^[a-zA-Z0-9]{4,40}$/.test(id)) throw new AccountError("Profil introuvable", 400);
-  const user = await userFromToken(accessToken, deviceId);
-  const current = profilesOf(user.app_metadata);
-  if (!current.some((profile) => profile.id === id)) throw new AccountError("Profil introuvable", 404);
-  await saveProfiles(user.id, user.app_metadata, current.filter((profile) => profile.id !== id));
+export async function deleteProfile(_accessToken: string, _deviceId: string, _id: string) {
+  throw new AccountError("Seul l'admin peut supprimer un profil", 403);
 }
 
-export async function logout(accessToken: string) {
+function publicProfile(profile: StoredProfile) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    color: profile.color,
+    locked: profile.pin.length === 4,
+  };
+}
+
+async function accountUser(id: string) {
+  assertUserId(id);
+  const { data, error } = await client().auth.admin.getUserById(id);
+  if (error || !data.user) throw new AccountError("Compte introuvable", 404);
+  return data.user;
+}
+
+export async function adminListProfiles(userId: string) {
+  const user = await accountUser(userId);
+  return profilesOf(user.app_metadata).map(publicProfile);
+}
+
+export async function adminCreateProfile(userId: string, nameRaw: string, pin: string) {
+  const name = nameRaw.trim();
+  if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
+  const user = await accountUser(userId);
+  const current = profilesOf(user.app_metadata);
+  if (current.length >= 5) throw new AccountError("5 profils maximum", 400);
+  const profile: StoredProfile = {
+    id: current.length === 0 ? "main" : crypto.randomUUID().replace(/-/g, ""),
+    name: name.slice(0, 18),
+    pin,
+    color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
+  };
+  await saveProfiles(user.id, user.app_metadata, [...current, profile]);
+  return publicProfile(profile);
+}
+
+export async function adminUpdateProfile(userId: string, id: string, nameRaw: string, pinRaw = "") {
+  const name = nameRaw.trim();
+  const nextPin = pinRaw.trim();
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name) throw new AccountError("Profil invalide", 400);
+  if (nextPin && !/^\d{4}$/.test(nextPin)) throw new AccountError("Code à 4 chiffres requis", 400);
+  const user = await accountUser(userId);
+  const current = profilesOf(user.app_metadata);
+  const existing = current.find((profile) => profile.id === id);
+  if (!existing) throw new AccountError("Profil introuvable", 404);
+  const profile = { ...existing, name: name.slice(0, 18), pin: nextPin || existing.pin };
+  await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
+  return publicProfile(profile);
+}
+
+export async function adminDeleteProfile(userId: string, id: string) {
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id)) throw new AccountError("Profil introuvable", 400);
+  const user = await accountUser(userId);
+  const current = profilesOf(user.app_metadata);
+  if (!current.some((profile) => profile.id === id)) throw new AccountError("Profil introuvable", 404);
+  const seats = seatsOf(user.app_metadata);
+  delete seats[id];
+  await saveProfiles(user.id, user.app_metadata, current.filter((profile) => profile.id !== id), {
+    profile_seats: seats,
+  });
+}
+
+export async function logout(accessToken: string, deviceId = "") {
   if (!accessToken) return;
+  if (deviceId.trim()) await releaseSeats(accessToken, deviceId).catch(() => undefined);
   const { error } = await client().auth.admin.signOut(accessToken);
   if (error) throw new AccountError("Session expirée", 401);
 }

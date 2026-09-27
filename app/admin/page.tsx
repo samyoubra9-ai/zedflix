@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 type AccountRow = {
   id: string;
@@ -17,7 +17,8 @@ type View = "overview" | "accounts" | "create";
 type Dialog =
   | { kind: "delete"; user: AccountRow }
   | { kind: "extend"; user: AccountRow }
-  | { kind: "release"; user: AccountRow };
+  | { kind: "release"; user: AccountRow }
+  | { kind: "profiles"; user: AccountRow };
 
 const DURATIONS = [
   { months: 1, label: "1 mois" },
@@ -421,6 +422,13 @@ export default function AdminPage() {
                           <div className="flex justify-end gap-2">
                             <button
                               type="button"
+                              onClick={() => setDialog({ kind: "profiles", user })}
+                              className="rounded-lg border border-white/15 px-3 py-2 hover:bg-white/10"
+                            >
+                              Profils
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 setExtendMonths(1);
                                 setDialog({ kind: "extend", user });
@@ -508,7 +516,11 @@ export default function AdminPage() {
         </main>
       </div>
 
-      {dialog ? (
+      {dialog?.kind === "profiles" ? (
+        <ProfileManager user={dialog.user} onClose={() => setDialog(null)} />
+      ) : null}
+
+      {dialog && dialog.kind !== "profiles" ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 px-6">
           <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6">
             {dialog.kind === "delete" ? (
@@ -575,6 +587,188 @@ export default function AdminPage() {
       ) : null}
     </div>
   );
+}
+
+type ManagedProfile = { id: string; name: string; color: number; locked: boolean };
+
+function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => void }) {
+  const [profiles, setProfiles] = useState<ManagedProfile[]>([]);
+  const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string }>>({});
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+
+  async function load() {
+    const response = await fetch(`/admin/users/${user.id}/profiles`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Impossible de charger les profils");
+    const next = (body.profiles || []) as ManagedProfile[];
+    setProfiles(next);
+    setDrafts(Object.fromEntries(next.map((profile) => [profile.id, { name: profile.name, pin: "" }])));
+  }
+
+  useEffect(() => {
+    load().catch((cause: Error) => setError(cause.message));
+  }, [user.id]);
+
+  async function run(work: () => Promise<void>) {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Erreur");
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 px-6">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
+        <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
+        <p className="mt-2 text-sm text-zinc-400">
+          Cinq profils maximum. Chaque nouveau profil a un code à 4 chiffres. Le téléphone ne peut pas les modifier.
+        </p>
+        <div className="mt-5 space-y-3">
+          {profiles.map((profile) => {
+            const draft = drafts[profile.id] || { name: profile.name, pin: "" };
+            return (
+              <div key={profile.id} className="rounded-xl border border-white/10 p-3">
+                <div className="mb-3 flex items-center gap-2 text-xs text-zinc-400">
+                  <span
+                    className="h-3 w-3 rounded-full"
+                    style={{ backgroundColor: cssColor(profile.color) }}
+                  />
+                  {profile.locked ? "Code défini" : "Sans code"}
+                </div>
+                <input
+                  value={draft.name}
+                  maxLength={18}
+                  onChange={(event) =>
+                    setDrafts((current) => ({ ...current, [profile.id]: { ...draft, name: event.target.value } }))
+                  }
+                  className={fieldClass()}
+                />
+                <input
+                  value={draft.pin}
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="Nouveau code"
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [profile.id]: { ...draft, pin: event.target.value.replace(/\D/g, "").slice(0, 4) },
+                    }))
+                  }
+                  className={`${fieldClass()} mt-2`}
+                />
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ name: draft.name, pin: draft.pin }),
+                        });
+                        const body = await response.json();
+                        if (!response.ok) throw new Error(body.error || "Modification impossible");
+                      })
+                    }
+                    className="rounded-lg border border-white/15 px-3 py-2 text-sm disabled:opacity-50"
+                  >
+                    Enregistrer
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
+                          method: "DELETE",
+                        });
+                        const body = await response.json();
+                        if (!response.ok) throw new Error(body.error || "Suppression impossible");
+                      })
+                    }
+                    className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-300 disabled:opacity-50"
+                  >
+                    Supprimer
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {profiles.length === 0 ? <p className="text-sm text-zinc-500">Aucun profil.</p> : null}
+        </div>
+        {profiles.length < 5 ? (
+          <form
+            className="mt-5 border-t border-white/10 pt-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(async () => {
+                const response = await fetch(`/admin/users/${user.id}/profiles`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name, pin }),
+                });
+                const body = await response.json();
+                if (!response.ok) throw new Error(body.error || "Création impossible");
+                setName("");
+                setPin("");
+              });
+            }}
+          >
+            <p className="text-sm text-zinc-300">Nouveau profil</p>
+            <input
+              required
+              maxLength={18}
+              value={name}
+              placeholder="Nom"
+              onChange={(event) => setName(event.target.value)}
+              className={`${fieldClass()} mt-3`}
+            />
+            <input
+              required
+              inputMode="numeric"
+              maxLength={4}
+              minLength={4}
+              value={pin}
+              placeholder="Code à 4 chiffres"
+              onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
+              className={`${fieldClass()} mt-2`}
+            />
+            <button
+              type="submit"
+              disabled={busy || pin.length !== 4}
+              className="mt-3 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              {busy ? "En cours…" : "Créer le profil"}
+            </button>
+          </form>
+        ) : null}
+        {error ? <p className="mt-4 text-sm text-red-400">{error}</p> : null}
+        <div className="mt-6 flex justify-end">
+          <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-300">
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function cssColor(color: number) {
+  return `#${(color >>> 0).toString(16).padStart(8, "0").slice(2, 8)}`;
 }
 
 function Stat({ label, value, tone = "text-white" }: { label: string; value: number; tone?: string }) {

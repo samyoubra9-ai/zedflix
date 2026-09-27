@@ -7,7 +7,9 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const body = await readJson(request);
-    return NextResponse.json(await presence(bearerToken(request), String(body.deviceId || "")));
+    return NextResponse.json(
+      await presence(bearerToken(request), String(body.deviceId || ""), String(body.profileId || "")),
+    );
   } catch (error) {
     return fail(error);
   }

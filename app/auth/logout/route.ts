@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    await readJson(request);
-    await logout(bearerToken(request));
+    const body = await readJson(request);
+    await logout(bearerToken(request), String(body.deviceId || ""));
     return NextResponse.json({ ok: true });
   } catch (error) {
     return fail(error);
