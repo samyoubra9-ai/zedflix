@@ -236,6 +236,106 @@ export async function accountFromRequest(request: Request): Promise<Account> {
   return { id: data.user.id, email: data.user.email };
 }
 
+const PROFILE_COLORS = [-1767148, -4711132, -14725511, -13669553, -10732178];
+
+export type StoredProfile = {
+  id: string;
+  name: string;
+  pin: string;
+  color: number;
+};
+
+function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfile[] {
+  const value = metadata?.profiles;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const profile = item as Record<string, unknown>;
+    const id = String(profile.id || "");
+    const name = String(profile.name || "").trim();
+    const pin = String(profile.pin || "");
+    const color = Number(profile.color);
+    if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !/^\d{4}$/.test(pin)) return [];
+    return [{ id, name: name.slice(0, 18), pin, color: Number.isFinite(color) ? color : PROFILE_COLORS[0] }];
+  }).slice(0, 5);
+}
+
+async function userFromToken(accessToken: string, deviceId: string) {
+  if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
+  const { data, error } = await client().auth.getUser(accessToken);
+  if (error || !data.user) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
+  assertDevice(data.user.app_metadata, deviceId);
+  return data.user;
+}
+
+async function saveProfiles(userId: string, metadata: Record<string, unknown> | undefined, profiles: StoredProfile[]) {
+  const { error } = await client().auth.admin.updateUserById(userId, {
+    app_metadata: keptMetadata(metadata, { profiles }),
+  });
+  if (error) throw new AccountError(error.message, 400);
+}
+
+export async function listProfiles(accessToken: string, deviceId: string) {
+  const user = await userFromToken(accessToken, deviceId);
+  return profilesOf(user.app_metadata);
+}
+
+export async function createProfile(
+  accessToken: string,
+  deviceId: string,
+  nameRaw: string,
+  pin: string,
+  idRaw = "",
+  color?: number,
+) {
+  const name = nameRaw.trim();
+  if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Profil invalide", 400);
+  const user = await userFromToken(accessToken, deviceId);
+  const current = profilesOf(user.app_metadata);
+  if (current.length >= 5) throw new AccountError("5 profils maximum", 400);
+  const requested = idRaw.trim();
+  const id = /^[a-zA-Z0-9]{4,40}$/.test(requested) && !current.some((profile) => profile.id === requested)
+    ? requested
+    : crypto.randomUUID().replace(/-/g, "");
+  const profile: StoredProfile = {
+    id,
+    name: name.slice(0, 18),
+    pin,
+    color: Number.isFinite(color) ? Number(color) : PROFILE_COLORS[current.length % PROFILE_COLORS.length],
+  };
+  await saveProfiles(user.id, user.app_metadata, [...current, profile]);
+  return profile;
+}
+
+export async function updateProfile(
+  accessToken: string,
+  deviceId: string,
+  id: string,
+  nameRaw: string,
+  pin: string,
+) {
+  const name = nameRaw.trim();
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !/^\d{4}$/.test(pin)) {
+    throw new AccountError("Profil invalide", 400);
+  }
+  const user = await userFromToken(accessToken, deviceId);
+  const current = profilesOf(user.app_metadata);
+  const existing = current.find((profile) => profile.id === id);
+  if (!existing) throw new AccountError("Profil introuvable", 404);
+  const profile = { ...existing, name: name.slice(0, 18), pin };
+  await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
+  return profile;
+}
+
+export async function deleteProfile(accessToken: string, deviceId: string, id: string) {
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(id)) throw new AccountError("Profil introuvable", 400);
+  const user = await userFromToken(accessToken, deviceId);
+  const current = profilesOf(user.app_metadata);
+  if (!current.some((profile) => profile.id === id)) throw new AccountError("Profil introuvable", 404);
+  await saveProfiles(user.id, user.app_metadata, current.filter((profile) => profile.id !== id));
+}
+
 export async function logout(accessToken: string) {
   if (!accessToken) return;
   const { error } = await client().auth.admin.signOut(accessToken);
