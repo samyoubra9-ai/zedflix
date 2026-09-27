@@ -222,6 +222,33 @@ export async function releaseDevice(id: string) {
   return { email: data.user.email };
 }
 
+export async function loginWeb(emailRaw: string, password: string) {
+  const email = emailRaw.trim().toLowerCase();
+  const supabase = client();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error || !data.session) {
+    throw new AccountError("Email ou mot de passe incorrect", 401);
+  }
+  assertActive(data.session.user.app_metadata);
+  return tokens(data.session);
+}
+
+export async function refreshWeb(refreshToken: string) {
+  if (!refreshToken) throw new AccountError("Session expirée", 401);
+  const { data, error } = await client().auth.refreshSession({ refresh_token: refreshToken });
+  if (error || !data.session) throw new AccountError("Session expirée", 401);
+  assertActive(data.session.user.app_metadata);
+  return tokens(data.session);
+}
+
+export async function accountFromAccessToken(token: string): Promise<Account> {
+  if (!token) throw new AccountError("Connexion requise", 401);
+  const { data, error } = await client().auth.getUser(token);
+  if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
+  return { id: data.user.id, email: data.user.email };
+}
+
 export async function login(emailRaw: string, password: string, deviceId: string) {
   if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const email = emailRaw.trim().toLowerCase();
@@ -258,11 +285,7 @@ export async function presence(accessToken: string, deviceId: string, profileId 
 export async function accountFromRequest(request: Request): Promise<Account> {
   const header = request.headers.get("authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) throw new AccountError("Connexion requise", 401);
-  const { data, error } = await client().auth.getUser(token);
-  if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
-  return { id: data.user.id, email: data.user.email };
+  return accountFromAccessToken(token);
 }
 
 const PROFILE_COLORS = [-1767148, -4711132, -14725511, -13669553, -10732178];
@@ -455,6 +478,31 @@ export async function adminDeleteProfile(userId: string, id: string) {
   await saveProfiles(user.id, user.app_metadata, current.filter((profile) => profile.id !== id), {
     profile_seats: seats,
   });
+}
+
+export async function listPublicProfiles(accessToken: string) {
+  const { data, error } = await client().auth.getUser(accessToken);
+  if (error || !data.user) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
+  return profilesOf(data.user.app_metadata).map(publicProfile);
+}
+
+export async function verifyProfilePin(accessToken: string, profileId: string, pin: string) {
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
+  const { data, error } = await client().auth.getUser(accessToken);
+  if (error || !data.user) throw new AccountError("Session expirée", 401);
+  assertActive(data.user.app_metadata);
+  const profile = profilesOf(data.user.app_metadata).find((item) => item.id === profileId);
+  if (!profile) throw new AccountError("Profil introuvable", 404);
+  if (profile.pin.length === 4 && profile.pin !== pin) {
+    throw new AccountError("Code incorrect", 403);
+  }
+  return publicProfile(profile);
+}
+
+export function profileColorCss(color: number) {
+  const hex = (color >>> 0).toString(16).padStart(8, "0").slice(-6);
+  return `#${hex}`;
 }
 
 export async function logout(accessToken: string, deviceId = "") {
