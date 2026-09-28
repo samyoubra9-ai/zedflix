@@ -3,7 +3,7 @@
 import { FormEvent, Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { rememberWebSession } from "@/components/account";
-import { IconDownload } from "@/components/icons";
+import { IconAndroid, IconTv } from "@/components/icons";
 
 export default function LoginPage() {
   return (
@@ -93,13 +93,25 @@ function LoginForm() {
       </div>
 
       <footer className="relative z-10 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8">
-        <a
-          href="/minuit.apk"
-          className="mx-auto flex h-12 w-full max-w-md items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-black"
-        >
-          <IconDownload className="h-4 w-4" />
-          Télécharger l’app
-        </a>
+        <div className="mx-auto flex w-full max-w-md flex-col gap-2 sm:flex-row">
+          <a
+            href="/minuit.apk"
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-black"
+          >
+            <IconAndroid className="h-4 w-4" />
+            Android
+          </a>
+          <a
+            href="/minuit-tv.apk"
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-white/15 text-sm font-semibold text-white ring-1 ring-white/20"
+          >
+            <IconTv className="h-4 w-4" />
+            Android TV
+          </a>
+        </div>
+        <p className="mx-auto mt-2 max-w-md text-center text-[11px] text-zinc-500">
+          Téléphone / tablette · Box &amp; Smart TV Android
+        </p>
       </footer>
     </main>
   );

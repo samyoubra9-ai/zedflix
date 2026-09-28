@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { IconAndroid, IconTv } from "@/components/icons";
 
 const NAV = [
   { label: "Accueil", href: "/" },
@@ -54,12 +55,20 @@ export function SiteHeader({ solid: solidProp = false }: { solid?: boolean }) {
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3 sm:gap-4">
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
           <a
             href="/minuit.apk"
-            className="hidden rounded-md bg-[#e50914] px-3.5 py-2 text-[12px] font-semibold text-white transition hover:bg-[#f6121d] sm:inline-flex"
+            className="hidden items-center gap-1.5 rounded-md bg-[#e50914] px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-[#f6121d] sm:inline-flex"
           >
-            Télécharger
+            <IconAndroid className="h-3.5 w-3.5" />
+            Android
+          </a>
+          <a
+            href="/minuit-tv.apk"
+            className="hidden items-center gap-1.5 rounded-md bg-white/15 px-3 py-2 text-[12px] font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/25 sm:inline-flex"
+          >
+            <IconTv className="h-3.5 w-3.5" />
+            Android TV
           </a>
           <div className="flex h-8 w-8 items-center justify-center rounded bg-zinc-800 text-xs font-semibold text-zinc-200 ring-1 ring-white/10">
             M
