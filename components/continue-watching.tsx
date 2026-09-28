@@ -29,7 +29,8 @@ export function ContinueWatching() {
             <Link
               key={watchHref(item)}
               href={watchHref(item)}
-              className="w-[68vw] max-w-[18rem] shrink-0 touch-manipulation sm:w-72"
+              data-tv-focus
+              className="tv-focus w-[68vw] max-w-[18rem] shrink-0 touch-manipulation outline-none sm:w-72"
             >
               <div className="relative aspect-video overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-white/5">
                 {item.poster ? (

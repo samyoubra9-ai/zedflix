@@ -9,6 +9,8 @@ import { IconInfo, IconPlay } from "@/components/icons";
 import { HeroSkeleton, RowSkeleton } from "@/components/loading";
 import { MyListButton } from "@/components/my-list-button";
 import { Poster, PosterRow } from "@/components/posters";
+import { useTvMode } from "@/hooks/use-tv-mode";
+import { TvBrowse } from "@/components/tv/tv-browse";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
 type Row = { name: string; items: HeroCard[] };
@@ -17,9 +19,15 @@ type Genre = { id: string; name: string };
 export default function BrowsePage() {
   return (
     <AccountGate>
-      <BrowseHome />
+      <BrowseSwitcher />
     </AccountGate>
   );
+}
+
+function BrowseSwitcher() {
+  const tv = useTvMode();
+  if (tv) return <TvBrowse />;
+  return <BrowseHome />;
 }
 
 function BrowseHome() {

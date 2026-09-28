@@ -16,6 +16,8 @@ import {
   IconUser,
 } from "./icons";
 import { PlayerSkeleton, ShellSkeleton } from "./loading";
+import { useTvMode } from "@/hooks/use-tv-mode";
+import { TvShell } from "@/components/tv/tv-shell";
 
 type ProfileInfo = { id: string; name: string; color: number; locked: boolean };
 type SessionState = { email: string; profile: ProfileInfo | null };
@@ -100,6 +102,7 @@ export function AccountGate({
   const { email, profile, ready, expired } = useSession();
   const router = useRouter();
   const pathname = usePathname();
+  const tv = useTvMode();
   const [elsewhere, setElsewhere] = useState(false);
 
   useEffect(() => {
@@ -151,14 +154,14 @@ export function AccountGate({
     if (player) return <PlayerSkeleton />;
     return (
       <main className="min-h-screen bg-black text-white">
-        <SiteNav />
+        {tv ? null : <SiteNav />}
         <ShellSkeleton />
       </main>
     );
   }
 
-  return (
-    <DetailRoot>
+  const content = (
+    <>
       {elsewhere ? (
         <div className="fixed inset-x-0 top-14 z-50 px-4 sm:top-16 sm:px-8 md:px-12">
           <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-950/90 px-4 py-3 text-sm text-amber-50 shadow-xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
@@ -174,6 +177,12 @@ export function AccountGate({
         </div>
       ) : null}
       {children}
+    </>
+  );
+
+  return (
+    <DetailRoot>
+      {tv && !player ? <TvShell>{content}</TvShell> : content}
     </DetailRoot>
   );
 }
@@ -200,6 +209,7 @@ export function SiteNav() {
   const pathname = usePathname();
   const router = useRouter();
   const { profile, email } = useSession();
+  const tv = useTvMode();
   const [open, setOpen] = useState(false);
   const [solid, setSolid] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -220,6 +230,8 @@ export function SiteNav() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  if (tv) return null;
 
   async function logout() {
     await fetch("/auth/web/logout", { method: "POST", credentials: "same-origin" });

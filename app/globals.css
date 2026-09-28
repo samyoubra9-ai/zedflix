@@ -119,3 +119,61 @@ body {
 .stagger-row {
   animation: stagger-in 0.5s ease-out both;
 }
+
+/* —— Android TV web mode —— */
+html.tv-remote,
+html.tv-remote body {
+  cursor: none;
+}
+
+html.tv-mode body {
+  overflow: hidden;
+}
+
+html.tv-mode .tv-pane {
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+html.tv-mode .tv-focus {
+  transition:
+    box-shadow 120ms ease,
+    transform 120ms ease,
+    background-color 120ms ease;
+}
+
+html.tv-mode .tv-focus:focus,
+html.tv-mode .tv-focus:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px #e50914,
+    0 0 0 6px rgba(229, 9, 20, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.55);
+  transform: scale(1.04);
+  z-index: 5;
+}
+
+html.tv-mode .tv-rail .tv-focus:focus,
+html.tv-mode .tv-rail .tv-focus:focus-visible {
+  transform: none;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Hide mobile sticky bottom chrome leftovers if any leak through */
+html.tv-mode [data-mobile-only] {
+  display: none !important;
+}
+
+html.tv-mode .tv-pane > main,
+html.tv-mode .tv-pane > div > main {
+  min-height: 100vh;
+}
+
+/* Pages still reserve space for the old top nav — tighten on TV */
+html.tv-mode .tv-pane .pt-16,
+html.tv-mode .tv-pane .pt-14,
+html.tv-mode .tv-pane .sm\:pt-20 {
+  padding-top: 1.5rem !important;
+}
