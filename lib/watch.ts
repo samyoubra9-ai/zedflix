@@ -410,43 +410,37 @@ export async function showCatalog(id: string) {
 
 function parseListing(html: string, kind: WatchResult["kind"]): Array<WatchCard & { version?: string }> {
   const section = html.match(/id="dle-content"[\s\S]*$/i)?.[0] || html;
-  return section
-    .split(/class="short"/)
-    .slice(1)
-    .map((block) => {
-      const title = decodeTitle(block.match(/class="short-title">([^<]+)/)?.[1] || "");
-      const poster = block.match(/<img[^>]+src="([^"]+)"/)?.[1] || "";
-      const modalId = block.match(/openModal\('(\d+)'\)/)?.[1] || "";
-      const newsId = block.match(/newsid=(\d+)/)?.[1] || "";
-      const posterHref =
-        block.match(/class="[^"]*short-poster[^"]*"[^>]*href="([^"]+)"/)?.[1] ||
-        block.match(/href="([^"]+)"[^>]*class="[^"]*short-poster[^"]*"/)?.[1] ||
-        "";
-      const slug = posterHref.split("/").filter(Boolean).pop()?.split("?")[0] || "";
-      const id =
-        modalId ||
-        newsId ||
-        (/^\d+/.test(slug) ? slug : "") ||
-        "";
-      if (!id || !title || id === "index.php") return null;
-      const version = extractVersionBadge(block);
-      if (!isFrenchVersionBadge(version)) return null;
-      const show =
-        kind === "show" ||
-        /saison/i.test(title) ||
-        posterHref.includes("-saison-") ||
-        posterHref.includes("/s-tv/");
-      return {
-        id,
-        title,
-        poster,
-        overview: "",
-        backdrop: poster,
-        kind: show ? ("show" as const) : ("movie" as const),
-        version,
-      };
-    })
-    .filter((item): item is WatchCard & { version?: string } => Boolean(item));
+  const items: Array<WatchCard & { version?: string }> = [];
+  for (const block of section.split(/class="short"/).slice(1)) {
+    const title = decodeTitle(block.match(/class="short-title">([^<]+)/)?.[1] || "");
+    const poster = block.match(/<img[^>]+src="([^"]+)"/)?.[1] || "";
+    const modalId = block.match(/openModal\('(\d+)'\)/)?.[1] || "";
+    const newsId = block.match(/newsid=(\d+)/)?.[1] || "";
+    const posterHref =
+      block.match(/class="[^"]*short-poster[^"]*"[^>]*href="([^"]+)"/)?.[1] ||
+      block.match(/href="([^"]+)"[^>]*class="[^"]*short-poster[^"]*"/)?.[1] ||
+      "";
+    const slug = posterHref.split("/").filter(Boolean).pop()?.split("?")[0] || "";
+    const id = modalId || newsId || (/^\d+/.test(slug) ? slug : "") || "";
+    if (!id || !title || id === "index.php") continue;
+    const version = extractVersionBadge(block);
+    if (!isFrenchVersionBadge(version)) continue;
+    const show =
+      kind === "show" ||
+      /saison/i.test(title) ||
+      posterHref.includes("-saison-") ||
+      posterHref.includes("/s-tv/");
+    items.push({
+      id,
+      title,
+      poster,
+      overview: "",
+      backdrop: poster,
+      kind: show ? "show" : "movie",
+      version,
+    });
+  }
+  return items;
 }
 
 function extractActors(html: string): WatchPerson[] {
