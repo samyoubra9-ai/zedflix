@@ -55,13 +55,18 @@ let cachedHome: { at: number; value: WatchHome } | null = null;
 export async function homeCatalog(): Promise<WatchHome> {
   if (cachedHome && Date.now() - cachedHome.at < 10 * 60 * 1000) return cachedHome.value;
   const origin = await catalogOrigin();
-  const response = await fetch(`${origin}/`, { headers: headers(origin), cache: "no-store" });
-  if (!response.ok) throw new Error("L’accueil est indisponible");
-  const html = await response.text();
-  const filmsAt = html.indexOf('fssts-cap">Films du moment');
-  const seriesAt = html.indexOf('fssts-cap">Séries du moment');
-  const films = parseCards(filmsAt >= 0 ? html.slice(filmsAt, seriesAt >= 0 ? seriesAt : undefined) : "", "movie");
-  const series = parseCards(seriesAt >= 0 ? html.slice(seriesAt) : "", "show");
+  // Accueil général mélange VOSTFR : on prend les listes VF dédiées.
+  const [filmsPage, seriesPage] = await Promise.all([
+    fetch(`${origin}/films/vf/`, { headers: headers(origin), cache: "no-store" }),
+    fetch(`${origin}/s-tv/s-vf/`, { headers: headers(origin), cache: "no-store" }),
+  ]);
+  if (!filmsPage.ok && !seriesPage.ok) throw new Error("L’accueil est indisponible");
+  const films = filmsPage.ok
+    ? parseListing(await filmsPage.text(), "movie").filter(hasFrenchVersion)
+    : [];
+  const series = seriesPage.ok
+    ? parseListing(await seriesPage.text(), "show").filter(hasFrenchVersion)
+    : [];
   const heroSource = [...films.slice(0, 4), ...series.slice(0, 4)];
   const hero = await Promise.all(heroSource.map(withBackdrop));
   const value: WatchHome = {
@@ -76,19 +81,23 @@ export async function homeCatalog(): Promise<WatchHome> {
   return value;
 }
 
-function parseCards(html: string, kind: WatchResult["kind"]): WatchCard[] {
-  return html
-    .split('class="short"')
-    .slice(1)
-    .map((block) => {
-      const id = block.match(/openModal\('(\d+)'\)/)?.[1] || block.match(/newsid=(\d+)/)?.[1] || "";
-      const title = decodeTitle(block.match(/class="short-title">([^<]+)/)?.[1] || "");
-      const poster = block.match(/<img src="([^"]+)"/)?.[1] || "";
-      const overview = decodeTitle(block.match(/id="desc-\d+"[^>]*>([\s\S]*?)<\/span>/)?.[1] || "");
-      if (!id || !title) return null;
-      return { id, title, poster, overview, backdrop: poster, kind };
-    })
-    .filter((item): item is WatchCard => Boolean(item));
+function extractVersionBadge(block: string) {
+  return decodeTitle(block.match(/film-version"><a[^>]*>([^<]+)/)?.[1] || "");
+}
+
+/** Keep VF / French / TrueFrench / VF+VOSTFR — drop VOSTFR-only and VO. */
+function isFrenchVersionBadge(version: string) {
+  const normalized = version.trim().toLowerCase();
+  if (!normalized) return true;
+  if (/^(vostfr|vost|vo|anglais|multi)$/i.test(normalized)) return false;
+  if (/truefrench|^french$|french\b/i.test(normalized)) return true;
+  if (normalized === "vf" || normalized.startsWith("vf+") || normalized.includes("+vf")) return true;
+  if (normalized.includes("vf") && !normalized.startsWith("vost")) return true;
+  return false;
+}
+
+function hasFrenchVersion(card: WatchCard & { version?: string }) {
+  return isFrenchVersionBadge(card.version || "");
 }
 
 async function withBackdrop(card: WatchCard): Promise<WatchCard> {
@@ -132,15 +141,15 @@ export async function listCatalog(kind: WatchResult["kind"], page = 1) {
   const path =
     kind === "movie"
       ? safePage === 1
-        ? "/films/"
-        : `/films/page/${safePage}/`
+        ? "/films/vf/"
+        : `/films/vf/page/${safePage}/`
       : safePage === 1
-        ? "/s-tv/"
-        : `/s-tv/page/${safePage}`;
+        ? "/s-tv/s-vf/"
+        : `/s-tv/s-vf/page/${safePage}/`;
   const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
   if (!response.ok) throw new Error("Catalogue indisponible");
-  const items = parseListing(await response.text(), kind);
-  return { items, page: safePage, hasMore: items.length >= 16 };
+  const items = parseListing(await response.text(), kind).filter(hasFrenchVersion);
+  return { items, page: safePage, hasMore: items.length >= 12 };
 }
 
 const FALLBACK_GENRES: WatchGenre[] = [
@@ -201,7 +210,7 @@ export async function genreCatalog(genreId: string, page = 1) {
   const path = `/film-en-streaming/${encodeURIComponent(id)}/page/${safePage}`;
   const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
   if (!response.ok) throw new Error("Genre indisponible");
-  const items = parseListing(await response.text(), "movie");
+  const items = parseListing(await response.text(), "movie").filter(hasFrenchVersion);
   const genres = await listGenres();
   const name = genres.find((item) => item.id === id)?.name || id;
   return { id, name, items, page: safePage, hasMore: items.length >= 12 };
@@ -399,7 +408,7 @@ export async function showCatalog(id: string) {
   };
 }
 
-function parseListing(html: string, kind: WatchResult["kind"]): WatchCard[] {
+function parseListing(html: string, kind: WatchResult["kind"]): Array<WatchCard & { version?: string }> {
   const section = html.match(/id="dle-content"[\s\S]*$/i)?.[0] || html;
   return section
     .split(/class="short"/)
@@ -420,6 +429,8 @@ function parseListing(html: string, kind: WatchResult["kind"]): WatchCard[] {
         (/^\d+/.test(slug) ? slug : "") ||
         "";
       if (!id || !title || id === "index.php") return null;
+      const version = extractVersionBadge(block);
+      if (!isFrenchVersionBadge(version)) return null;
       const show =
         kind === "show" ||
         /saison/i.test(title) ||
@@ -432,9 +443,10 @@ function parseListing(html: string, kind: WatchResult["kind"]): WatchCard[] {
         overview: "",
         backdrop: poster,
         kind: show ? ("show" as const) : ("movie" as const),
+        version,
       };
     })
-    .filter((item): item is WatchCard => Boolean(item));
+    .filter((item): item is WatchCard & { version?: string } => Boolean(item));
 }
 
 function extractActors(html: string): WatchPerson[] {
@@ -631,21 +643,24 @@ function vidzyUrl(block: Record<string, string> | undefined) {
 
 function isFrenchAudioKey(key: string) {
   const normalized = key.trim().toLowerCase();
+  // Never treat default / vostfr / vo as French — default is often English VO.
+  if (!normalized || normalized === "default" || normalized === "vostfr" || normalized === "vost" || normalized === "vo") {
+    return false;
+  }
   return (
     normalized === "vf" ||
     normalized === "vff" ||
     normalized === "vfq" ||
     normalized === "truefrench" ||
     normalized === "french" ||
-    normalized === "default" ||
-    normalized.startsWith("vf")
+    (normalized.startsWith("vf") && !normalized.startsWith("vost"))
   );
 }
 
 function pickVidzy(players: Record<string, Record<string, string>>) {
   const langs = players.vidzy || players.Vidzy;
   if (!langs) return null;
-  const preferred = ["vff", "vfq", "vf", "truefrench", "french", "default"];
+  const preferred = ["vff", "vfq", "vf", "truefrench", "french"];
   for (const key of preferred) {
     const url = langs[key] || langs[key.toUpperCase()];
     if (url?.startsWith("http")) return url;
@@ -653,6 +668,12 @@ function pickVidzy(players: Record<string, Record<string, string>>) {
   for (const [key, url] of Object.entries(langs)) {
     if (isFrenchAudioKey(key) && url?.startsWith("http")) return url;
   }
+  // last resort: only allow "default" when there is no VO/VOSTFR sibling
+  // (French-only uploads sometimes expose a single default stream).
+  const keys = Object.keys(langs).map((key) => key.toLowerCase());
+  const hasForeignSibling = keys.some((key) => key === "vostfr" || key === "vost" || key === "vo");
+  const defaultUrl = langs.default || langs.Default;
+  if (!hasForeignSibling && defaultUrl?.startsWith("http")) return defaultUrl;
   return null;
 }
 
