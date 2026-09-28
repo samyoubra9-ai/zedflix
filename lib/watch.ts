@@ -481,36 +481,62 @@ function extractDirectors(html: string): string[] {
   return [...row.matchAll(/<a[^>]*>([^<]+)<\/a>/g)].map((match) => decodeTitle(match[1])).filter(Boolean);
 }
 
+export type WatchVersion = "vf" | "vo" | "vostfr";
+
 export type WatchServer = {
   id: string;
-  name: string;
   src: string;
+  version: WatchVersion;
+  label: string;
+  host: string;
+};
+
+export type WatchServerOption = {
+  id: string;
+  label: string;
+  version: WatchVersion;
 };
 
 export type WatchPlayResult = {
   stream: string;
   server: string;
-  servers: Array<{ id: string; name: string }>;
+  servers: WatchServerOption[];
+  language: "fr" | "en" | "unknown";
+  version: WatchVersion;
 };
 
-/** Resolve a playable stream like the Android app: all VF servers, Vidzy first, auto-fallback. */
-export async function resolvePlaylist(id: string, preferredServer?: string): Promise<WatchPlayResult> {
+export class EnglishChoiceNeededError extends Error {
+  servers: WatchServerOption[];
+  constructor(servers: WatchServerOption[]) {
+    super("VF_UNAVAILABLE_ASK_ENGLISH");
+    this.name = "EnglishChoiceNeededError";
+    this.servers = servers;
+  }
+}
+
+type PlayOptions = {
+  preferredServer?: string;
+  allowEnglish?: boolean;
+};
+
+/** Resolve a playable stream: prefer confirmed VF, otherwise ask before English. */
+export async function resolvePlaylist(id: string, options: PlayOptions = {}): Promise<WatchPlayResult> {
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
   const servers = listMovieServers(film.players || {});
-  return playFromServers(servers, origin, preferredServer);
+  return playFromServers(servers, origin, options);
 }
 
 /** @deprecated alias kept for older imports */
 export async function vidzyPlaylist(id: string, preferredServer?: string) {
-  const result = await resolvePlaylist(id, preferredServer);
+  const result = await resolvePlaylist(id, { preferredServer });
   return result.stream;
 }
 
 export async function resolveEpisode(
   seasonId: string,
   episode: number,
-  preferredServer?: string,
+  options: PlayOptions = {},
 ): Promise<WatchPlayResult> {
   const origin = await catalogOrigin();
   const response = await fetch(`${origin}/engine/ajax/sx.php?id=${encodeURIComponent(seasonId)}`, {
@@ -523,13 +549,14 @@ export async function resolveEpisode(
     vostfr?: Record<string, Record<string, string>>;
     vo?: Record<string, Record<string, string>>;
   };
-  const servers = listEpisodeServers(data.vf?.[String(episode)]);
-  return playFromServers(servers, origin, preferredServer);
+  const key = String(episode);
+  const servers = listEpisodeServers(data.vf?.[key], data.vostfr?.[key], data.vo?.[key]);
+  return playFromServers(servers, origin, options);
 }
 
 /** @deprecated alias kept for older imports */
 export async function vidzyEpisode(seasonId: string, episode: number, preferredServer?: string) {
-  const result = await resolveEpisode(seasonId, episode, preferredServer);
+  const result = await resolveEpisode(seasonId, episode, { preferredServer });
   return result.stream;
 }
 
@@ -591,20 +618,13 @@ async function episodesFor(origin: string, id: string): Promise<WatchEpisode[]> 
     }));
 }
 
-function langLabel(key: string) {
-  const labels: Record<string, string> = {
-    vff: "TrueFrench",
-    vfq: "French",
-    vf: "VF",
-    truefrench: "TrueFrench",
-    french: "French",
-    default: "VF",
-  };
-  return labels[key.toLowerCase()] || "VF";
-}
-
-function providerLabel(provider: string) {
-  return provider.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+function versionFromKey(key: string): WatchVersion | null {
+  const normalized = key.trim().toLowerCase();
+  if (normalized === "vostfr" || normalized === "vost") return "vostfr";
+  if (normalized === "vo" || normalized === "anglais" || normalized === "en" || normalized === "eng") return "vo";
+  if (isFrenchAudioKey(normalized)) return "vf";
+  if (normalized === "default") return "vf"; // provisional — refined at play time
+  return null;
 }
 
 function ignoreSource(source: string, href: string) {
@@ -616,94 +636,115 @@ function isDirectMedia(url: string) {
   return /\.(m3u8|mp4|mkv|webm)(\?|$)/i.test(url) || url.includes(".m3u8");
 }
 
-/** Mirror Android FrenchStreamProvider.getServers for movies (VF only). */
+function publicServerOptions(servers: WatchServer[]): WatchServerOption[] {
+  return servers.map(({ id, label, version }) => ({ id, label, version }));
+}
+
+function assignVersionLabels(servers: Array<Omit<WatchServer, "label">>): WatchServer[] {
+  const counts: Record<WatchVersion, number> = { vf: 0, vo: 0, vostfr: 0 };
+  return servers.map((server) => {
+    counts[server.version] += 1;
+    const n = counts[server.version];
+    const base = server.version === "vf" ? "VF" : server.version === "vostfr" ? "VOSTFR" : "VO";
+    return { ...server, label: n === 1 ? base : `${base} ${n}` };
+  });
+}
+
+/** Build VF + VO/VOSTFR servers from film_api (labels only, no hostnames in UI). */
 function listMovieServers(players: Record<string, Record<string, string>>): WatchServer[] {
-  const langOrder = ["vff", "vfq", "vf", "truefrench", "french", "default"];
-  const servers: WatchServer[] = [];
+  const raw: Array<Omit<WatchServer, "label">> = [];
+  const seen = new Set<string>();
   let index = 0;
 
   for (const [provider, langMap] of Object.entries(players)) {
-    const seen = new Set<string>();
-    const defaultUrl = langMap.default || langMap.Default;
-
-    const frenchEntries = Object.entries(langMap)
-      .filter(([key]) => key.toLowerCase() !== "default" && isFrenchAudioKey(key))
-      .sort(([a], [b]) => {
-        const ai = langOrder.indexOf(a.toLowerCase());
-        const bi = langOrder.indexOf(b.toLowerCase());
-        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-      });
-
-    for (const [lang, url] of frenchEntries) {
-      if (!url || (!url.startsWith("http") && !url.trim()) || ignoreSource(provider, url) || seen.has(url)) {
-        continue;
-      }
-      seen.add(url);
-      servers.push({
-        id: `vid${index++}`,
-        name: `${providerLabel(provider)} (${langLabel(lang)})`,
-        src: url,
-      });
-    }
-
     const keys = Object.keys(langMap).map((key) => key.toLowerCase());
     const hasForeignSibling = keys.some((key) => key === "vostfr" || key === "vost" || key === "vo");
-    if (
-      !hasForeignSibling &&
-      seen.size === 0 &&
-      defaultUrl &&
-      defaultUrl.startsWith("http") &&
-      !ignoreSource(provider, defaultUrl)
-    ) {
-      servers.push({
+
+    const entries = Object.entries(langMap)
+      .map(([key, url]) => ({ key, url, version: versionFromKey(key) }))
+      .filter((entry): entry is { key: string; url: string; version: WatchVersion } => !!entry.version);
+
+    // Prefer explicit VF keys over ambiguous default when both exist.
+    const explicitFrench = entries.filter((entry) => entry.key.toLowerCase() !== "default" && entry.version === "vf");
+    const foreign = entries.filter((entry) => entry.version === "vo" || entry.version === "vostfr");
+    const defaults = entries.filter((entry) => entry.key.toLowerCase() === "default");
+
+    const chosen: Array<{ url: string; version: WatchVersion }> = [];
+    for (const entry of explicitFrench) chosen.push(entry);
+    for (const entry of foreign) chosen.push(entry);
+    if (!explicitFrench.length) {
+      for (const entry of defaults) {
+        // If VO/VOSTFR siblings exist, default is often the same as VF — still OK as VF.
+        // If default equals a vostfr URL, skip.
+        const isForeignUrl = foreign.some((item) => item.url === entry.url);
+        if (isForeignUrl) continue;
+        chosen.push({ url: entry.url, version: hasForeignSibling ? "vf" : "vf" });
+      }
+    }
+
+    for (const entry of chosen) {
+      if (!entry.url?.startsWith("http") || ignoreSource(provider, entry.url) || seen.has(entry.url)) continue;
+      seen.add(entry.url);
+      raw.push({
         id: `vid${index++}`,
-        name: `${providerLabel(provider)} (VF)`,
-        src: defaultUrl,
+        src: entry.url,
+        version: entry.version,
+        host: provider.toLowerCase(),
       });
     }
   }
 
-  return sortServers(servers);
+  return sortServers(assignVersionLabels(raw));
 }
 
-/** Mirror Android episode VF map: every host in vf[episode], never vostfr/vo. */
-function listEpisodeServers(block: Record<string, string> | undefined): WatchServer[] {
-  if (!block) return [];
-  const servers: WatchServer[] = [];
+/** Episodes: VF map + optional VOSTFR/VO maps for version picker. */
+function listEpisodeServers(
+  vfBlock: Record<string, string> | undefined,
+  vostfrBlock?: Record<string, string>,
+  voBlock?: Record<string, string>,
+): WatchServer[] {
+  const raw: Array<Omit<WatchServer, "label">> = [];
+  const seen = new Set<string>();
   let index = 0;
-  for (const [provider, url] of Object.entries(block)) {
-    if (!url?.startsWith("http") || ignoreSource(provider, url)) continue;
-    servers.push({
-      id: `ep${index++}`,
-      name: `${providerLabel(provider)} (VF)`,
-      src: url,
-    });
-  }
-  return sortServers(servers);
+
+  const push = (block: Record<string, string> | undefined, version: WatchVersion) => {
+    if (!block) return;
+    for (const [provider, url] of Object.entries(block)) {
+      if (!url?.startsWith("http") || ignoreSource(provider, url) || seen.has(url)) continue;
+      seen.add(url);
+      raw.push({
+        id: `ep${index++}`,
+        src: url,
+        version,
+        host: provider.toLowerCase(),
+      });
+    }
+  };
+
+  push(vfBlock, "vf");
+  push(vostfrBlock, "vostfr");
+  push(voBlock, "vo");
+  return sortServers(assignVersionLabels(raw));
 }
 
-/**
- * Prefer the same hosts the Android app tends to play first.
- * FrenchStream often exposes only `default` URLs: Vidzy's default is frequently
- * English VO, while premium/fsvid is the real French dub.
- */
 function sortServers(servers: WatchServer[]) {
-  const score = (server: WatchServer) => {
-    const hay = `${server.name} ${server.src}`.toLowerCase();
-    if (hay.includes("premium") || hay.includes("fsvid")) return 0;
-    if (hay.includes("uqload")) return 1;
-    if (hay.includes("vidoza")) return 2;
-    if (hay.includes("filemoon") || hay.includes("filmoon") || hay.includes("streamwish")) return 3;
-    if (hay.includes("vidzy")) return 8; // often English when only `default` exists
-    if (hay.includes("dood") || hay.includes("voe")) return 9;
+  const versionScore = (version: WatchVersion) => (version === "vf" ? 0 : version === "vostfr" ? 1 : 2);
+  const hostScore = (host: string) => {
+    if (host.includes("premium") || host.includes("fsvid")) return 0;
+    if (host.includes("uqload")) return 1;
+    if (host.includes("vidoza")) return 2;
+    if (host.includes("filemoon") || host.includes("filmoon") || host.includes("streamwish")) return 3;
+    if (host.includes("vidzy")) return 8;
+    if (host.includes("dood") || host.includes("voe")) return 9;
     return 5;
   };
-  // Stable sort: keep API order when scores tie (like the Android first() pick).
   return servers
     .map((server, index) => ({ server, index }))
     .sort((a, b) => {
-      const diff = score(a.server) - score(b.server);
-      return diff !== 0 ? diff : a.index - b.index;
+      const byVersion = versionScore(a.server.version) - versionScore(b.server.version);
+      if (byVersion !== 0) return byVersion;
+      const byHost = hostScore(a.server.host) - hostScore(b.server.host);
+      return byHost !== 0 ? byHost : a.index - b.index;
     })
     .map(({ server }) => server);
 }
@@ -711,43 +752,127 @@ function sortServers(servers: WatchServer[]) {
 async function playFromServers(
   servers: WatchServer[],
   origin: string,
-  preferredServer?: string,
+  options: PlayOptions = {},
 ): Promise<WatchPlayResult> {
   if (!servers.length) {
     throw new Error("Version française (VF) indisponible pour ce titre");
   }
 
-  const ordered = preferredServer
-    ? [
-        ...servers.filter((server) => server.id === preferredServer),
-        ...servers.filter((server) => server.id !== preferredServer),
-      ]
-    : servers;
+  const preferredServer = options.preferredServer;
+  const allowEnglish = options.allowEnglish === true;
+  const catalog = publicServerOptions(servers);
+  const preferred = preferredServer ? servers.find((server) => server.id === preferredServer) : undefined;
 
+  const tryOrder = preferred
+    ? [preferred, ...servers.filter((server) => server.id !== preferred.id)]
+    : [
+        ...servers.filter((server) => server.version === "vf"),
+        ...(allowEnglish ? servers.filter((server) => server.version !== "vf") : []),
+      ];
+
+  const english: WatchPlayResult[] = [];
   const errors: string[] = [];
-  for (const server of ordered) {
+
+  for (const server of tryOrder) {
+    // Manual VO pick is always allowed; autoplay stays VF-only unless allowEnglish.
+    if (!preferred && server.version !== "vf" && !allowEnglish) continue;
     try {
       const stream = await openEmbed(server.src, origin);
       if (!stream) {
-        errors.push(`${server.name}: illisible`);
+        errors.push(`${server.label}: illisible`);
         continue;
       }
-      return {
+      const language = await classifyStreamLanguage(stream);
+      const result: WatchPlayResult = {
         stream,
         server: server.id,
-        servers: servers.map(({ id, name }) => ({ id, name })),
+        servers: catalog,
+        language,
+        version: server.version,
       };
+
+      // User picked this server explicitly in the player menu.
+      if (preferred && server.id === preferred.id) return result;
+
+      if (server.version !== "vf") {
+        if (allowEnglish) return result;
+        english.push(result);
+        continue;
+      }
+
+      // Auto VF path: skip streams that are clearly English / risky Vidzy unknowns.
+      if (language === "en") {
+        english.push(result);
+        continue;
+      }
+      if (language === "unknown" && server.host.includes("vidzy")) {
+        english.push({ ...result, language: "en" });
+        continue;
+      }
+      if (isTrustedFrench(server, language) || language === "fr" || language === "unknown") {
+        return result;
+      }
+      english.push(result);
     } catch (error) {
-      errors.push(`${server.name}: ${error instanceof Error ? error.message : "échec"}`);
+      errors.push(`${server.label}: ${error instanceof Error ? error.message : "échec"}`);
     }
+  }
+
+  if (english.length) {
+    if (allowEnglish || preferred) return english[0];
+    throw new EnglishChoiceNeededError(catalog);
   }
 
   throw new Error(
     errors.length
-      ? `Aucun serveur VF lisible (${errors.slice(0, 3).join(" · ")})`
+      ? `Aucun serveur lisible (${errors.slice(0, 3).join(" · ")})`
       : "Version française (VF) indisponible pour ce titre",
   );
 }
+
+function isTrustedFrench(server: WatchServer, language: WatchPlayResult["language"]) {
+  if (language === "fr") return true;
+  if (language !== "unknown") return false;
+  return server.host.includes("premium") || server.host.includes("fsvid");
+}
+
+async function classifyStreamLanguage(stream: string): Promise<WatchPlayResult["language"]> {
+  const lower = stream.toLowerCase();
+  const hasFre = /lang\/(fre|fra)\b|\/(fre|fra)\//i.test(lower);
+  const hasEng = /lang\/(eng|en)\b|\/eng\//i.test(lower);
+  if (hasFre) return "fr";
+  if (hasEng) return "en";
+  if (!stream.includes(".m3u8")) return "unknown";
+
+  try {
+    const response = await fetchMedia(stream);
+    if (!response.ok) return "unknown";
+    const body = await response.text();
+    const lines = body.match(/#EXT-X-MEDIA:[^\n]*/gi) || [];
+    let hasFr = false;
+    let hasEn = false;
+    for (const line of lines) {
+      if (!/TYPE=AUDIO/i.test(line)) continue;
+      const lang = line.match(/LANGUAGE="([^"]+)"/i)?.[1]?.toLowerCase() || "";
+      const name = line.match(/NAME="([^"]+)"/i)?.[1]?.toLowerCase() || "";
+      const hay = `${lang} ${name}`;
+      if (/^(fr|fra|fre)\b/.test(lang) || hay.includes("french") || hay.includes("fran") || /\bvf\b/.test(hay)) {
+        hasFr = true;
+      }
+      if (/^(en|eng)\b/.test(lang) || hay.includes("english") || hay.includes("anglais")) {
+        hasEn = true;
+      }
+    }
+    if (hasFr) return "fr";
+    if (hasEn) return "en";
+    if (/LANGUAGE="(fr|fra|fre)"/i.test(body)) return "fr";
+    if (/LANGUAGE="(en|eng)"/i.test(body)) return "en";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 
 async function followBridge(url: string, origin: string) {
   const needsBridge =

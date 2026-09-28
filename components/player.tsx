@@ -24,7 +24,7 @@ import {
 
 type QualityOption = { index: number; label: string };
 type Menu = null | "root" | "speed" | "quality" | "server";
-type ServerOption = { id: string; name: string };
+type ServerOption = { id: string; label: string; version: "vf" | "vo" | "vostfr" };
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 
@@ -88,6 +88,8 @@ export function Player({
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [activeServer, setActiveServer] = useState<string | null>(null);
   const [preferredServer, setPreferredServer] = useState<string | null>(null);
+  const [allowEnglish, setAllowEnglish] = useState(false);
+  const [englishPrompt, setEnglishPrompt] = useState(false);
 
   const showControls = useCallback((sticky = false) => {
     setControls(true);
@@ -103,6 +105,8 @@ export function Player({
     setPreferredServer(null);
     setActiveServer(null);
     setServers([]);
+    setAllowEnglish(false);
+    setEnglishPrompt(false);
   }, [id, episode]);
 
   useEffect(() => {
@@ -128,16 +132,19 @@ export function Player({
   }, [kind, id, episode, reloadKey]);
 
   const switchServer = useCallback((next: string) => {
-    if (!next || next === preferredServer || next === activeServer) {
+    if (!next || next === activeServer) {
       setMenu(null);
       return;
     }
+    const option = servers.find((item) => item.id === next);
     setPreferredServer(next);
     setActiveServer(next);
+    setAllowEnglish(option?.version !== "vf");
+    setEnglishPrompt(false);
     setMenu(null);
     setStatus("");
     setLoading(true);
-  }, [preferredServer, activeServer]);
+  }, [activeServer, servers]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -150,9 +157,11 @@ export function Player({
     setQuality(-1);
     let hls: Hls | null = null;
     let stop = false;
+    setEnglishPrompt(false);
     const params = new URLSearchParams({ id });
     if (episode) params.set("episode", String(episode));
     if (preferredServer) params.set("server", preferredServer);
+    if (allowEnglish) params.set("allowEnglish", "1");
     const path = `/api/watch/play?${params.toString()}`;
 
     fetch(path)
@@ -162,14 +171,22 @@ export function Player({
           error?: string;
           server?: string;
           servers?: ServerOption[];
+          needsEnglishChoice?: boolean;
+          language?: string;
         };
         if (stop) return;
+        if (Array.isArray(data.servers)) setServers(data.servers);
+        if (data.needsEnglishChoice) {
+          setLoading(false);
+          setEnglishPrompt(true);
+          setStatus("");
+          return;
+        }
         if (!response.ok || !data.src) {
           setLoading(false);
           setStatus(data.error || "Lecture impossible");
           return;
         }
-        if (Array.isArray(data.servers)) setServers(data.servers);
         if (data.server) setActiveServer(data.server);
 
         const onLevels = (levels: Level[]) => {
@@ -203,7 +220,7 @@ export function Player({
               const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
               return hay.startsWith("fr") || hay.includes("french") || hay.includes("fran") || hay.includes("vf");
             });
-            if (!anyFrench && tracks[0]) tracks[0].enabled = true;
+            if (!anyFrench && allowEnglish && tracks[0]) tracks[0].enabled = true;
           };
           video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
         } else if (Hls.isSupported()) {
@@ -261,7 +278,7 @@ export function Player({
       video.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey, preferredServer]);
+  }, [id, episode, reloadKey, preferredServer, allowEnglish]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -555,7 +572,41 @@ export function Player({
           </div>
         ) : null}
 
-        {resumeAt && !loading && !status ? (
+        {englishPrompt && !loading ? (
+          <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/40 to-transparent pb-28 sm:items-center sm:pb-0">
+            <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
+              <p className="text-sm text-zinc-400">Version française</p>
+              <p className="mt-1 text-lg font-semibold">Aucune VF détectée pour ce titre.</p>
+              <p className="mt-2 text-sm text-zinc-400">
+                Tu peux lancer la VO, ou ouvrir les réglages pour choisir VF / VO / VOSTFR.
+              </p>
+              <div className="mt-5 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const vo = servers.find((item) => item.version !== "vf");
+                    setEnglishPrompt(false);
+                    setAllowEnglish(true);
+                    if (vo) setPreferredServer(vo.id);
+                    setLoading(true);
+                    setStatus("");
+                  }}
+                  className="h-11 flex-1 rounded-md bg-[#e50914] text-sm font-semibold"
+                >
+                  Lancer en VO
+                </button>
+                <Link
+                  href={back}
+                  className="flex h-11 flex-1 items-center justify-center rounded-md bg-white/10 text-sm font-medium"
+                >
+                  Annuler
+                </Link>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {resumeAt && !loading && !status && !englishPrompt ? (
           <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/40 to-transparent pb-28 sm:items-center sm:pb-0">
             <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
               <p className="text-sm text-zinc-400">Reprendre la lecture ?</p>
@@ -583,7 +634,7 @@ export function Player({
         <div
           data-controls
           className={`absolute inset-0 z-20 transition-opacity duration-300 ${
-            controls || !playing || menu || resumeAt || status
+            controls || !playing || menu || resumeAt || status || englishPrompt
               ? "opacity-100"
               : "pointer-events-none opacity-0"
           }`}
@@ -714,9 +765,9 @@ export function Player({
                               onClick={() => setMenu("server")}
                               className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
                             >
-                              <span>Serveur</span>
+                              <span>Version</span>
                               <span className="max-w-[7rem] truncate text-zinc-400">
-                                {servers.find((item) => item.id === activeServer)?.name || "—"}
+                                {servers.find((item) => item.id === activeServer)?.label || "—"}
                               </span>
                             </button>
                           ) : null}
@@ -790,7 +841,7 @@ export function Player({
                             onClick={() => setMenu("root")}
                             className="w-full px-3 py-2 text-left text-xs text-zinc-500"
                           >
-                            ← Serveur
+                            ← Version
                           </button>
                           {servers.map((item) => (
                             <button
@@ -799,7 +850,7 @@ export function Player({
                               onClick={() => switchServer(item.id)}
                               className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
                             >
-                              <span className="truncate pr-2">{item.name}</span>
+                              <span className="truncate pr-2">{item.label}</span>
                               {item.id === activeServer ? (
                                 <IconCheck className="h-4 w-4 shrink-0 text-[#e50914]" />
                               ) : null}
