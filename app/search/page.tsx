@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
+import { IconSearch } from "@/components/icons";
 import { GridSkeleton } from "@/components/loading";
 import { Poster, PosterGrid } from "@/components/posters";
 
@@ -43,32 +44,36 @@ function Search() {
     }
     setItems(data.results || []);
     setPeople(data.people || []);
-    setStatus(
-      data.results?.length || data.people?.length ? "" : "Aucun résultat",
-    );
+    setStatus(data.results?.length || data.people?.length ? "" : "Aucun résultat");
   }
 
   return (
-    <main className="min-h-screen bg-black px-6 pb-16 pt-24 text-white md:px-12">
+    <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
-      <h1 className="text-4xl font-bold">Recherche</h1>
-      <form onSubmit={onSubmit} className="mt-8 flex max-w-2xl gap-3">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Titre ou acteur"
-          className="h-12 flex-1 rounded bg-zinc-800 px-4 outline-none"
-        />
-        <button type="submit" className="h-12 rounded bg-red-600 px-5 font-semibold">
-          Chercher
+      <h1 className="text-3xl font-bold sm:text-4xl">Recherche</h1>
+      <form onSubmit={onSubmit} className="mt-6 flex max-w-2xl gap-2 sm:mt-8 sm:gap-3">
+        <div className="relative min-w-0 flex-1">
+          <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Titre ou acteur"
+            className="h-12 w-full rounded-lg bg-zinc-900 pl-10 pr-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
+          />
+        </div>
+        <button
+          type="submit"
+          className="h-12 shrink-0 rounded-lg bg-red-600 px-4 text-sm font-semibold sm:px-5"
+        >
+          OK
         </button>
       </form>
-      <div className="mt-10 space-y-10">
+      <div className="mt-8 space-y-10 sm:mt-10">
         {loading ? <GridSkeleton /> : null}
 
         {!loading && people.length ? (
           <section>
-            <h2 className="mb-4 text-xl font-semibold">Acteurs</h2>
+            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Acteurs</h2>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {people.map((person) => (
                 <li key={person.id}>
@@ -78,11 +83,9 @@ function Search() {
                   >
                     <span>
                       <span className="block font-medium">{person.name}</span>
-                      <span className="text-xs text-zinc-400">
-                        {person.count}+ titres
-                      </span>
+                      <span className="text-xs text-zinc-400">{person.count}+ titres</span>
                     </span>
-                    <span className="text-sm text-zinc-400">Voir →</span>
+                    <span className="text-sm text-zinc-400">→</span>
                   </Link>
                 </li>
               ))}
@@ -92,7 +95,7 @@ function Search() {
 
         {!loading && items.length ? (
           <section>
-            <h2 className="mb-4 text-xl font-semibold">Titres</h2>
+            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Titres</h2>
             <div className="rise">
               <PosterGrid items={items} />
             </div>

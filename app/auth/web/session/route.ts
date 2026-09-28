@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AccountError, listPublicProfiles } from "@/lib/accounts";
+import {
+  AccountError,
+  deviceLabelFromUa,
+  listPublicProfiles,
+  touchWebDevice,
+} from "@/lib/accounts";
 import {
   currentProfileId,
   ensureWebDevice,
@@ -20,9 +25,15 @@ export async function GET(request: NextRequest) {
       email: account.email,
       profile: selected,
       profiles,
+      remember: account.remember,
     });
-    if (account.session) writeSession(response, account.session);
-    ensureWebDevice(request, response);
+    if (account.session) writeSession(response, account.session, { remember: account.remember });
+    const { deviceId } = ensureWebDevice(request, response);
+    await touchWebDevice(
+      account.accessToken,
+      deviceId,
+      deviceLabelFromUa(request.headers.get("user-agent") || ""),
+    ).catch(() => undefined);
     return response;
   } catch (error) {
     const status = error instanceof AccountError ? error.status : 401;

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
 import { CastRow, MetaChips, type CastGenre, type CastPerson } from "@/components/cast";
+import { IconPlay } from "@/components/icons";
 import { HeroSkeleton } from "@/components/loading";
 
 type Film = {
@@ -60,7 +61,7 @@ function FilmDetail() {
   }, [params.id]);
 
   return (
-    <main className="min-h-screen bg-black text-white">
+    <main className="min-h-screen bg-black pb-24 text-white md:pb-10">
       <SiteNav />
       {loading ? <HeroSkeleton /> : null}
       {!loading && film ? (
@@ -69,8 +70,8 @@ function FilmDetail() {
             <img src={film.backdrop || film.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-r from-black via-black/70 to-black/20" />
             <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30" />
-            <div className="relative flex min-h-[70vh] max-w-2xl flex-col justify-end px-6 pb-16 pt-28 md:px-12">
-              <h1 className="text-4xl font-bold md:text-6xl">{film.title}</h1>
+          <div className="relative flex min-h-[58vh] max-w-2xl flex-col justify-end px-4 pb-10 pt-24 sm:min-h-[70vh] sm:px-8 sm:pb-16 sm:pt-28 md:px-12">
+            <h1 className="text-3xl font-bold sm:text-4xl md:text-6xl">{film.title}</h1>
               <MetaChips
                 genres={film.genres}
                 directors={film.directors}
@@ -81,13 +82,14 @@ function FilmDetail() {
               {film.overview ? <p className="mt-4 text-lg text-white/90">{film.overview}</p> : null}
               <Link
                 href={`/watch/${params.id}`}
-                className="mt-6 inline-flex w-fit rounded bg-white px-6 py-3 text-lg font-semibold text-black"
+                className="mt-6 inline-flex min-h-12 w-fit items-center gap-2 rounded-md bg-white px-5 py-3 text-base font-semibold text-black sm:px-6 sm:text-lg"
               >
+                <IconPlay className="h-4 w-4" />
                 Lecture
               </Link>
             </div>
           </section>
-          <section className="px-6 pb-16 md:px-12">
+          <section className="px-4 pb-10 sm:px-8 md:px-12">
             <CastRow cast={film.cast || []} />
           </section>
         </>

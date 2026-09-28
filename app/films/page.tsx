@@ -74,10 +74,10 @@ export function Catalog({ kind, title }: { kind: "movie" | "show"; title: string
   }
 
   return (
-    <main className="min-h-screen bg-black px-6 pb-16 pt-24 text-white md:px-12">
+    <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
-      <h1 className="text-4xl font-bold">{title}</h1>
-      <div className="mt-8">
+      <h1 className="text-3xl font-bold sm:text-4xl">{title}</h1>
+      <div className="mt-6 sm:mt-8">
         {loading ? <GridSkeleton /> : null}
         {!loading && items.length ? (
           <div className="rise space-y-8">
@@ -88,7 +88,7 @@ export function Catalog({ kind, title }: { kind: "movie" | "show"; title: string
                   type="button"
                   onClick={loadMore}
                   disabled={loadingMore}
-                  className="rounded bg-white/10 px-5 py-3 text-sm font-semibold disabled:opacity-50"
+                  className="min-h-11 rounded-lg bg-white/10 px-5 py-3 text-sm font-semibold ring-1 ring-white/10 disabled:opacity-50"
                 >
                   {loadingMore ? "Chargement…" : "Voir plus"}
                 </button>

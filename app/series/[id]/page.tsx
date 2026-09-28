@@ -83,7 +83,7 @@ function SeriesDetail() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white">
+    <main className="min-h-screen bg-black pb-24 text-white md:pb-10">
       <SiteNav />
       {loading ? <HeroSkeleton /> : null}
       {!loading && show ? (
@@ -91,8 +91,8 @@ function SeriesDetail() {
           <section className="rise relative min-h-[52vh]">
             <img src={show.backdrop || show.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-black/20" />
-            <div className="relative flex min-h-[52vh] max-w-2xl flex-col justify-end px-6 pb-10 pt-28 md:px-12">
-              <h1 className="text-4xl font-bold md:text-6xl">{show.title}</h1>
+            <div className="relative flex min-h-[48vh] max-w-2xl flex-col justify-end px-4 pb-8 pt-24 sm:min-h-[52vh] sm:px-8 sm:pb-10 sm:pt-28 md:px-12">
+              <h1 className="text-3xl font-bold sm:text-4xl md:text-6xl">{show.title}</h1>
               <MetaChips
                 genres={show.genres}
                 directors={show.directors}
@@ -103,15 +103,15 @@ function SeriesDetail() {
               {show.overview ? <p className="mt-4 text-lg text-white/90">{show.overview}</p> : null}
             </div>
           </section>
-          <section className="px-6 pb-16 md:px-12">
+          <section className="px-4 pb-10 sm:px-8 md:px-12">
             <CastRow cast={show.cast || []} />
-            <div className="mt-10 flex gap-2 overflow-x-auto">
+            <div className="-mx-4 mt-10 flex gap-2 overflow-x-auto px-4 [-webkit-overflow-scrolling:touch] [scrollbar-width:none] sm:mx-0 sm:px-0">
               {show.seasons.map((season) => (
                 <button
                   key={season.id}
                   type="button"
                   onClick={() => openSeason(season.id)}
-                  className={`shrink-0 rounded px-4 py-2 text-sm ${season.id === seasonId ? "bg-white text-black" : "bg-white/10"}`}
+                  className={`min-h-10 shrink-0 rounded-md px-4 py-2 text-sm ${season.id === seasonId ? "bg-white text-black" : "bg-white/10"}`}
                 >
                   {season.title.replace(/^.+-\s*/, "")}
                 </button>
@@ -125,11 +125,14 @@ function SeriesDetail() {
               <ul className="mt-6 divide-y divide-white/10">
                 {episodes.map((episode) => (
                   <li key={episode.number}>
-                    <Link href={`/watch/${seasonId}/${episode.number}`} className="flex items-center justify-between py-4">
-                      <span>
+                    <Link
+                      href={`/watch/${seasonId}/${episode.number}`}
+                      className="flex min-h-12 items-center justify-between gap-3 py-3.5 touch-manipulation"
+                    >
+                      <span className="min-w-0 truncate text-sm sm:text-base">
                         {episode.number}. {episode.title}
                       </span>
-                      <span className="text-sm font-semibold">Lecture</span>
+                      <span className="shrink-0 text-sm font-semibold text-zinc-300">Lecture</span>
                     </Link>
                   </li>
                 ))}

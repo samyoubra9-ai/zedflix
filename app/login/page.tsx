@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { rememberWebSession } from "@/components/account";
+import { IconDownload } from "@/components/icons";
 
 export default function LoginPage() {
   return (
@@ -12,9 +14,13 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
+  const search = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [status, setStatus] = useState(
+    search.get("expired") === "1" ? "Session expirée — reconnecte-toi." : "",
+  );
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -23,7 +29,7 @@ function LoginForm() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember }),
     });
     const data = (await response.json()) as { email?: string; error?: string };
     if (!response.ok) {
@@ -31,43 +37,70 @@ function LoginForm() {
       return;
     }
     rememberWebSession(data.email || email.trim().toLowerCase());
-    window.location.assign("/profiles");
+    const next = search.get("next");
+    window.location.assign(next && next.startsWith("/") ? next : "/profiles");
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-black px-6 text-white">
-      <form onSubmit={onSubmit} className="w-full max-w-md">
-        <div className="flex items-center gap-3">
-          <img src="/mark.png" alt="" className="h-10 w-10 rounded-xl" />
-          <p className="text-3xl font-bold tracking-tight text-red-600">MINUIT</p>
-        </div>
-        <h1 className="mt-8 text-3xl font-semibold">Connexion</h1>
-        <input
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          placeholder="Email"
-          className="mt-8 h-12 w-full rounded bg-zinc-800 px-4 outline-none"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="Mot de passe"
-          className="mt-3 h-12 w-full rounded bg-zinc-800 px-4 outline-none"
-        />
-        <button type="submit" className="mt-6 h-12 w-full rounded bg-red-600 font-semibold">
-          Entrer
-        </button>
-        {status ? <p className="mt-4 text-sm text-zinc-300">{status}</p> : null}
+    <main className="relative flex min-h-screen flex-col bg-[#050505] text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(229,9,20,0.18),_transparent_55%)]" />
 
+      <header className="relative z-10 flex items-center px-5 py-5 sm:px-8">
+        <img src="/mark.png" alt="" className="h-9 w-9 rounded-xl sm:h-10 sm:w-10" />
+        <span className="ml-3 text-sm font-semibold tracking-[0.22em]">MINUIT</span>
+      </header>
+
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-5 pb-8 sm:px-6">
+        <form
+          onSubmit={onSubmit}
+          className="w-full max-w-md rounded-2xl border border-white/10 bg-black/50 p-5 shadow-2xl backdrop-blur sm:p-8"
+        >
+          <h1 className="text-2xl font-semibold sm:text-3xl">Connexion</h1>
+          <p className="mt-2 text-sm text-zinc-400">Accède à ton catalogue Minuit.</p>
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="Email"
+            autoComplete="email"
+            className="mt-7 h-12 w-full rounded-lg bg-zinc-900 px-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Mot de passe"
+            autoComplete="current-password"
+            className="mt-3 h-12 w-full rounded-lg bg-zinc-900 px-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
+          />
+          <label className="mt-4 flex items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="h-4 w-4 rounded border-white/20 bg-zinc-900"
+            />
+            Se souvenir de moi
+          </label>
+          <button
+            type="submit"
+            className="mt-6 h-12 w-full rounded-lg bg-red-600 font-semibold transition hover:bg-red-500"
+          >
+            Entrer
+          </button>
+          {status ? <p className="mt-4 text-sm text-zinc-300">{status}</p> : null}
+        </form>
+      </div>
+
+      <footer className="relative z-10 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8">
         <a
           href="/minuit.apk"
-          className="mt-8 flex h-12 w-full items-center justify-center rounded bg-white text-sm font-semibold text-black"
+          className="mx-auto flex h-12 w-full max-w-md items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-black"
         >
+          <IconDownload className="h-4 w-4" />
           Télécharger l’app
         </a>
-      </form>
+      </footer>
     </main>
   );
 }

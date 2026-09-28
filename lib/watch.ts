@@ -35,6 +35,7 @@ function headers(origin: string) {
     "User-Agent": USER_AGENT,
     Cookie: "dle_skin=VFV1",
     Referer: `${origin}/`,
+    "Accept-Language": "fr-FR,fr;q=0.9",
     "X-Requested-With": "XMLHttpRequest",
   };
 }
@@ -140,6 +141,70 @@ export async function listCatalog(kind: WatchResult["kind"], page = 1) {
   if (!response.ok) throw new Error("Catalogue indisponible");
   const items = parseListing(await response.text(), kind);
   return { items, page: safePage, hasMore: items.length >= 16 };
+}
+
+const FALLBACK_GENRES: WatchGenre[] = [
+  { id: "action", name: "Action" },
+  { id: "animation", name: "Animation" },
+  { id: "aventure", name: "Aventure" },
+  { id: "comedie", name: "Comédie" },
+  { id: "crime", name: "Crime" },
+  { id: "documentaire", name: "Documentaire" },
+  { id: "drame", name: "Drame" },
+  { id: "fantastique", name: "Fantastique" },
+  { id: "guerre", name: "Guerre" },
+  { id: "historique", name: "Historique" },
+  { id: "horreur", name: "Horreur" },
+  { id: "romance", name: "Romance" },
+  { id: "science-fiction", name: "Science-fiction" },
+  { id: "thriller", name: "Thriller" },
+  { id: "western", name: "Western" },
+];
+
+let cachedGenres: { at: number; value: WatchGenre[] } | null = null;
+
+export async function listGenres(): Promise<WatchGenre[]> {
+  if (cachedGenres && Date.now() - cachedGenres.at < 30 * 60 * 1000) return cachedGenres.value;
+  try {
+    const origin = await catalogOrigin();
+    const response = await fetch(`${origin}/`, { headers: headers(origin), cache: "no-store" });
+    if (!response.ok) throw new Error("fail");
+    const html = await response.text();
+    const block =
+      html.match(/class="menu-section"[^>]*>([\s\S]*?)<\/div>/)?.[1] ||
+      html.match(/id="menu-section"[^>]*>([\s\S]*?)<\/div>/)?.[1] ||
+      "";
+    const genres: WatchGenre[] = [];
+    const seen = new Set<string>();
+    for (const match of block.matchAll(/<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/g)) {
+      const href = match[1];
+      const name = decodeTitle(match[2]).trim();
+      if (!name || name.length > 28) continue;
+      const id = href.replace(/\/+$/, "").split("/").pop() || "";
+      if (!id || seen.has(id) || /^(films|s-tv|series|accueil|home)$/i.test(id)) continue;
+      seen.add(id);
+      genres.push({ id, name });
+    }
+    const value = genres.length >= 6 ? genres.slice(0, 24) : FALLBACK_GENRES;
+    cachedGenres = { at: Date.now(), value };
+    return value;
+  } catch {
+    return FALLBACK_GENRES;
+  }
+}
+
+export async function genreCatalog(genreId: string, page = 1) {
+  const id = genreId.trim().replace(/^\/+|\/+$/g, "");
+  if (!/^[a-zA-Z0-9-]{2,60}$/.test(id)) throw new Error("Genre introuvable");
+  const origin = await catalogOrigin();
+  const safePage = Math.max(1, Math.min(40, Math.floor(page) || 1));
+  const path = `/film-en-streaming/${encodeURIComponent(id)}/page/${safePage}`;
+  const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
+  if (!response.ok) throw new Error("Genre indisponible");
+  const items = parseListing(await response.text(), "movie");
+  const genres = await listGenres();
+  const name = genres.find((item) => item.id === id)?.name || id;
+  return { id, name, items, page: safePage, hasMore: items.length >= 12 };
 }
 
 export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
@@ -414,7 +479,7 @@ export async function vidzyPlaylist(id: string) {
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
   const embed = pickVidzy(film.players || {});
-  if (!embed) throw new Error("Vidzy est absent pour ce film");
+  if (!embed) throw new Error("Version française (VF) indisponible pour ce film");
   return openVidzy(embed, origin);
 }
 
@@ -431,9 +496,8 @@ export async function vidzyEpisode(seasonId: string, episode: number) {
     vo?: Record<string, Record<string, string>>;
   };
   const key = String(episode);
-  const embed =
-    vidzyUrl(data.vf?.[key]) || vidzyUrl(data.vostfr?.[key]) || vidzyUrl(data.vo?.[key]);
-  if (!embed) throw new Error("Vidzy est absent pour cet épisode");
+  const embed = vidzyUrl(data.vf?.[key]);
+  if (!embed) throw new Error("Version française (VF) indisponible pour cet épisode");
   return openVidzy(embed, origin);
 }
 
@@ -483,11 +547,8 @@ async function episodesFor(origin: string, id: string): Promise<WatchEpisode[]> 
     vo?: Record<string, unknown>;
     info?: Record<string, { title?: string }>;
   };
-  const numbers = new Set([
-    ...Object.keys(data.vf || {}),
-    ...Object.keys(data.vostfr || {}),
-    ...Object.keys(data.vo || {}),
-  ]);
+  // Uniquement les épisodes dispo en VF
+  const numbers = new Set(Object.keys(data.vf || {}));
   return [...numbers]
     .map((key) => Number(key))
     .filter((number) => Number.isInteger(number) && number > 0)
@@ -503,6 +564,7 @@ async function openVidzy(embed: string, origin: string) {
     headers: {
       "User-Agent": USER_AGENT,
       Referer: `${origin}/`,
+      "Accept-Language": "fr-FR,fr;q=0.9",
     },
     cache: "no-store",
   });
@@ -567,14 +629,31 @@ function vidzyUrl(block: Record<string, string> | undefined) {
   return url?.startsWith("http") ? url : null;
 }
 
+function isFrenchAudioKey(key: string) {
+  const normalized = key.trim().toLowerCase();
+  return (
+    normalized === "vf" ||
+    normalized === "vff" ||
+    normalized === "vfq" ||
+    normalized === "truefrench" ||
+    normalized === "french" ||
+    normalized === "default" ||
+    normalized.startsWith("vf")
+  );
+}
+
 function pickVidzy(players: Record<string, Record<string, string>>) {
   const langs = players.vidzy || players.Vidzy;
   if (!langs) return null;
-  for (const key of ["vff", "vfq", "vf", "default", "vostfr", "vo"]) {
-    const url = langs[key];
+  const preferred = ["vff", "vfq", "vf", "truefrench", "french", "default"];
+  for (const key of preferred) {
+    const url = langs[key] || langs[key.toUpperCase()];
     if (url?.startsWith("http")) return url;
   }
-  return Object.values(langs).find((url) => url.startsWith("http")) || null;
+  for (const [key, url] of Object.entries(langs)) {
+    if (isFrenchAudioKey(key) && url?.startsWith("http")) return url;
+  }
+  return null;
 }
 
 function decodePlayerSource(html: string, link: string) {

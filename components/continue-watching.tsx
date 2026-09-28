@@ -2,58 +2,53 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { listContinueWatching, type WatchProgress } from "@/lib/watch-progress";
-import { watchHref } from "@/lib/tmdb";
+import { listContinueWatching, watchHref, type WatchProgress } from "@/lib/watch-progress";
+import { IconPlay } from "./icons";
 
 export function ContinueWatching() {
   const [items, setItems] = useState<WatchProgress[]>([]);
 
   useEffect(() => {
     setItems(listContinueWatching());
+    function refresh() {
+      setItems(listContinueWatching());
+    }
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, []);
 
-  if (items.length === 0) return null;
+  if (!items.length) return null;
 
   return (
-    <section id="ma-liste" className="relative py-4">
-      <div className="mb-3 px-4 sm:px-8 lg:px-12">
-        <h2 className="text-lg font-medium tracking-tight text-white sm:text-xl">
-          Continuer à regarder
-        </h2>
-      </div>
-      <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-2 sm:gap-3 sm:px-8 lg:px-12">
+    <section>
+      <h2 className="mb-2.5 text-base font-semibold sm:mb-3 sm:text-xl">Continuer à regarder</h2>
+      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
         {items.map((item) => {
           const progress = item.duration > 0 ? (item.seconds / item.duration) * 100 : 0;
           return (
             <Link
-              key={`${item.type}-${item.id}-${item.videoKey}`}
-              href={watchHref(item, item.videoKey)}
-              className="group relative w-[42vw] max-w-[280px] shrink-0 sm:w-[30vw] md:w-[22vw] lg:w-[17vw]"
+              key={watchHref(item)}
+              href={watchHref(item)}
+              className="w-[68vw] max-w-[18rem] shrink-0 touch-manipulation sm:w-72"
             >
-              <div className="relative aspect-video overflow-hidden rounded-md bg-zinc-900 ring-1 ring-white/5 transition group-hover:ring-white/25">
-                {item.backdrop || item.poster ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={(item.backdrop || item.poster)!}
-                    alt={item.title}
-                    className="h-full w-full object-cover"
-                  />
-                ) : null}
+              <div className="relative aspect-video overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-white/5">
+                {item.poster ? (
+                  <img src={item.poster} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full items-center justify-center bg-zinc-900 text-zinc-600">
+                    <IconPlay className="h-8 w-8" />
+                  </div>
+                )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent" />
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 transition group-hover:opacity-100">
-                  <span className="rounded-full bg-white/90 p-3 text-black shadow">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7L8 5z" />
-                    </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-black">
+                    <IconPlay className="h-5 w-5" />
                   </span>
                 </div>
                 <div className="absolute inset-x-0 bottom-0 p-2.5">
-                  <p className="line-clamp-1 text-[13px] font-medium text-white">{item.title}</p>
+                  <p className="line-clamp-1 text-sm font-medium">{item.title}</p>
                   <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/20">
-                    <div
-                      className="h-full rounded-full bg-[#e50914]"
-                      style={{ width: `${progress}%` }}
-                    />
+                    <div className="h-full rounded-full bg-[#e50914]" style={{ width: `${progress}%` }} />
                   </div>
                 </div>
               </div>

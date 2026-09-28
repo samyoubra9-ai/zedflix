@@ -83,10 +83,10 @@ function PeopleFilmography() {
   }
 
   return (
-    <main className="min-h-screen bg-black px-6 pb-16 pt-24 text-white md:px-12">
+    <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
       <p className="text-sm font-semibold tracking-[0.18em] text-zinc-400">ACTEUR</p>
-      <h1 className="mt-2 text-4xl font-bold">{name}</h1>
+      <h1 className="mt-2 text-3xl font-bold sm:text-4xl">{name}</h1>
       <p className="mt-2 text-sm text-zinc-400">Filmographie</p>
       <div className="mt-8">
         {loading ? <GridSkeleton /> : null}

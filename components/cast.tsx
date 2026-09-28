@@ -9,24 +9,26 @@ export function CastRow({ cast }: { cast: CastPerson[] }) {
   if (!cast.length) return null;
   return (
     <section className="mt-8">
-      <h3 className="mb-4 text-lg font-semibold">Distribution</h3>
-      <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none]">
+      <h3 className="mb-3 text-base font-semibold sm:mb-4 sm:text-lg">Distribution</h3>
+      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none] sm:mx-0 sm:gap-4 sm:px-0">
         {cast.map((person) => (
           <Link
             key={person.id}
             href={`/people/${encodeURIComponent(person.id)}`}
-            className="w-24 shrink-0 text-center"
+            className="w-[4.75rem] shrink-0 touch-manipulation text-center sm:w-24"
           >
-            <span className="mx-auto block aspect-[2/3] w-full overflow-hidden rounded-md bg-zinc-900">
+            <span className="mx-auto block aspect-[2/3] w-full overflow-hidden rounded-md bg-zinc-900 ring-1 ring-white/5">
               {person.image ? (
-                <img src={person.image} alt="" className="h-full w-full object-cover" />
+                <img src={person.image} alt="" className="h-full w-full object-cover" loading="lazy" />
               ) : (
-                <span className="flex h-full items-center justify-center text-2xl text-zinc-500">
+                <span className="flex h-full items-center justify-center text-xl text-zinc-500 sm:text-2xl">
                   {(person.name[0] || "?").toUpperCase()}
                 </span>
               )}
             </span>
-            <span className="mt-2 block line-clamp-2 text-xs text-zinc-300">{person.name}</span>
+            <span className="mt-1.5 block line-clamp-2 text-[11px] leading-tight text-zinc-300 sm:mt-2 sm:text-xs">
+              {person.name}
+            </span>
           </Link>
         ))}
       </div>
@@ -68,9 +70,13 @@ export function MetaChips({
       {genres?.length ? (
         <div className="flex flex-wrap gap-2">
           {genres.map((genre) => (
-            <span key={genre.id} className="rounded-full border border-white/15 px-3 py-1 text-xs text-zinc-300">
+            <Link
+              key={genre.id}
+              href={`/genres/${encodeURIComponent(genre.id)}`}
+              className="rounded-full border border-white/15 px-3 py-1 text-xs text-zinc-300 transition hover:border-white/40 hover:bg-white/5 hover:text-white"
+            >
               {genre.name}
-            </span>
+            </Link>
           ))}
         </div>
       ) : null}

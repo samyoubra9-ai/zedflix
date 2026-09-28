@@ -1,9 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { forgetWebSession, rememberWebSession, rememberWebProfile, forgetWebProfile } from "@/components/account";
+import {
+  forgetWebSession,
+  rememberWebSession,
+  rememberWebProfile,
+  forgetWebProfile,
+} from "@/components/account";
 import { Spinner } from "@/components/loading";
+import { PinPad, clearPinLock, notePinFail, usePinLockCountdown } from "@/components/pin-pad";
+import {
+  hasBiometric,
+  lastProfileId,
+  saveLastProfileId,
+  verifyBiometric,
+} from "@/components/profile-prefs";
 
 type Profile = {
   id: string;
@@ -25,7 +37,9 @@ export default function ProfilesPage() {
   const [status, setStatus] = useState("");
   const [unlock, setUnlock] = useState<Profile | null>(null);
   const [pin, setPin] = useState("");
+  const [trust, setTrust] = useState(true);
   const [busy, setBusy] = useState(false);
+  const lock = usePinLockCountdown(unlock?.id || null);
 
   useEffect(() => {
     let stop = false;
@@ -34,7 +48,6 @@ export default function ProfilesPage() {
         const data = (await response.json()) as {
           email?: string;
           profiles?: Profile[];
-          profile?: Profile | null;
           error?: string;
         };
         if (stop) return;
@@ -44,8 +57,25 @@ export default function ProfilesPage() {
         }
         rememberWebSession(data.email);
         setEmail(data.email);
-        setProfiles(data.profiles || []);
+        const list = data.profiles || [];
+        setProfiles(list);
         setLoading(false);
+
+        const lastId = lastProfileId();
+        const last = list.find((profile) => profile.id === lastId);
+        if (last) {
+          if (last.locked && hasBiometric(last.id)) {
+            verifyBiometric(last.id).then((ok) => {
+              if (ok) choose(last, "", true);
+              else setUnlock(last);
+            });
+          } else if (last.locked) {
+            setUnlock(last);
+          } else {
+            // try trusted unlock silently
+            choose(last, "", true);
+          }
+        }
       })
       .catch(() => {
         if (!stop) router.replace("/login?next=/profiles");
@@ -53,38 +83,55 @@ export default function ProfilesPage() {
     return () => {
       stop = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
-  async function choose(profile: Profile, code = "") {
-    if (profile.locked && code.length !== 4) {
+  async function choose(profile: Profile, code = "", preferTrust = false) {
+    if (profile.locked && code.length !== 4 && !preferTrust) {
       setUnlock(profile);
       setPin("");
       setStatus("");
       return;
     }
+    if (profile.locked && code.length === 4 && lock.locked) {
+      setStatus(`Trop d’essais. Réessaie dans ${lock.seconds}s`);
+      return;
+    }
     setBusy(true);
-    setStatus(profile.locked ? "Vérification…" : "Ouverture…");
+    setStatus(profile.locked && code ? "Vérification…" : "Ouverture…");
     const response = await fetch("/auth/web/profiles", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profileId: profile.id, pin: code }),
+      body: JSON.stringify({
+        profileId: profile.id,
+        pin: code,
+        trust: trust || preferTrust,
+      }),
     });
     const data = (await response.json()) as { profile?: Profile; error?: string };
     setBusy(false);
     if (!response.ok) {
-      setStatus(data.error || "Impossible d’ouvrir ce profil");
+      if (response.status === 403 && profile.locked && code) {
+        const fail = notePinFail(profile.id);
+        setStatus(
+          fail.locked
+            ? `Trop d’essais. Réessaie dans ${Math.ceil((fail.until - Date.now()) / 1000)}s`
+            : data.error || "Code incorrect",
+        );
+      } else if (preferTrust && !code) {
+        setUnlock(profile);
+        setStatus("");
+      } else {
+        setStatus(data.error || "Impossible d’ouvrir ce profil");
+      }
       setPin("");
       return;
     }
+    clearPinLock(profile.id);
+    saveLastProfileId(profile.id);
     rememberWebProfile(data.profile || profile);
     window.location.assign("/browse");
-  }
-
-  function onPinSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!unlock || pin.length !== 4 || busy) return;
-    choose(unlock, pin);
   }
 
   async function signOut() {
@@ -113,31 +160,31 @@ export default function ProfilesPage() {
   }
 
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center bg-black px-6 text-white">
+    <main className="relative flex min-h-screen flex-col items-center justify-center bg-black px-4 py-16 text-white sm:px-6">
       <button
         type="button"
         onClick={signOut}
-        className="absolute right-6 top-6 text-sm text-zinc-400 hover:text-white"
+        className="absolute right-4 top-5 text-sm text-zinc-400 hover:text-white sm:right-6 sm:top-6"
       >
         Se déconnecter
       </button>
 
-      <p className="text-3xl font-bold tracking-tight text-red-600">MINUIT</p>
-      <h1 className="mt-10 text-center text-3xl font-semibold sm:text-5xl">Qui regarde ?</h1>
-      <p className="mt-3 text-sm text-zinc-400">{email}</p>
+      <p className="text-2xl font-bold tracking-tight text-red-600 sm:text-3xl">MINUIT</p>
+      <h1 className="mt-8 text-center text-2xl font-semibold sm:mt-10 sm:text-5xl">Qui regarde ?</h1>
+      <p className="mt-3 max-w-full truncate px-4 text-sm text-zinc-400">{email}</p>
 
       {initials.length ? (
-        <ul className="mt-12 flex max-w-4xl flex-wrap justify-center gap-8">
+        <ul className="mt-10 flex max-w-4xl flex-wrap justify-center gap-5 sm:mt-12 sm:gap-8">
           {initials.map((profile) => (
             <li key={profile.id}>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => choose(profile)}
-                className="group w-28 text-center sm:w-36"
+                className="group w-24 text-center sm:w-36"
               >
                 <span
-                  className="relative mx-auto flex aspect-square w-full items-center justify-center rounded-md text-4xl font-bold text-white shadow-lg ring-2 ring-transparent transition group-hover:ring-white sm:text-5xl"
+                  className="relative mx-auto flex aspect-square w-full items-center justify-center rounded-md text-3xl font-bold text-white shadow-lg ring-2 ring-transparent transition group-hover:ring-white sm:text-5xl"
                   style={{ background: profile.tint }}
                 >
                   {profile.letter}
@@ -163,46 +210,28 @@ export default function ProfilesPage() {
       {status && !unlock ? <p className="mt-8 text-sm text-zinc-400">{status}</p> : null}
 
       {unlock ? (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/80 px-4">
-          <form
-            onSubmit={onPinSubmit}
-            className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl"
-          >
-            <p className="text-sm text-zinc-400">Code pour</p>
-            <h2 className="mt-1 text-2xl font-semibold">{unlock.name}</h2>
-            <input
-              autoFocus
-              inputMode="numeric"
-              pattern="\d{4}"
-              maxLength={4}
-              value={pin}
-              onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-              placeholder="••••"
-              className="mt-6 h-14 w-full rounded-lg bg-zinc-900 text-center text-2xl tracking-[0.4em] outline-none ring-1 ring-white/10 focus:ring-white/30"
-            />
-            {status ? <p className="mt-3 text-sm text-red-400">{status}</p> : null}
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setUnlock(null);
-                  setPin("");
-                  setStatus("");
-                }}
-                className="h-11 flex-1 rounded-lg bg-white/10 text-sm font-medium"
-              >
-                Annuler
-              </button>
-              <button
-                type="submit"
-                disabled={pin.length !== 4 || busy}
-                className="h-11 flex-1 rounded-lg bg-red-600 text-sm font-semibold disabled:opacity-40"
-              >
-                Entrer
-              </button>
-            </div>
-          </form>
-        </div>
+        <PinPad
+          name={unlock.name}
+          value={pin}
+          onChange={setPin}
+          busy={busy || lock.locked}
+          trust={trust}
+          onTrustChange={setTrust}
+          status={
+            lock.locked
+              ? `Trop d’essais. Réessaie dans ${lock.seconds}s`
+              : status
+          }
+          onCancel={() => {
+            setUnlock(null);
+            setPin("");
+            setStatus("");
+          }}
+          onSubmit={(code) => {
+            if (lock.locked) return;
+            choose(unlock, code);
+          }}
+        />
       ) : null}
     </main>
   );

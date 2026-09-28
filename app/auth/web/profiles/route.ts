@@ -23,13 +23,16 @@ export async function POST(request: NextRequest) {
       profileId?: string;
       pin?: string;
       clear?: boolean;
+      trust?: boolean;
     };
     if (body.clear) return await clearWebProfile(request);
     const profileId = String(body.profileId || "").trim();
     if (!profileId) {
       return NextResponse.json({ error: "Profil requis" }, { status: 400 });
     }
-    return await selectWebProfile(request, profileId, String(body.pin || ""));
+    return await selectWebProfile(request, profileId, String(body.pin || ""), {
+      trust: Boolean(body.trust),
+    });
   } catch (error) {
     const status = error instanceof AccountError ? error.status : 502;
     return NextResponse.json(

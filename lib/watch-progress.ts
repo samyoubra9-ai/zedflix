@@ -1,16 +1,15 @@
 export type WatchProgress = {
-  type: "movie" | "tv";
-  id: number;
+  kind: "movie" | "show";
+  id: string;
+  episode?: number;
   title: string;
-  poster: string | null;
-  backdrop: string | null;
-  videoKey: string;
+  poster?: string;
   seconds: number;
   duration: number;
   updatedAt: number;
 };
 
-const STORAGE_KEY = "minuit.watch.progress.v1";
+const STORAGE_KEY = "minuit.watch.progress.v2";
 
 function readAll(): WatchProgress[] {
   if (typeof window === "undefined") return [];
@@ -28,28 +27,24 @@ function writeAll(items: WatchProgress[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, 40)));
 }
 
-export function progressKey(type: string, id: number | string, videoKey?: string) {
-  return `${type}:${id}:${videoKey || "default"}`;
+function same(a: WatchProgress, b: Pick<WatchProgress, "kind" | "id" | "episode">) {
+  return a.kind === b.kind && a.id === b.id && (a.episode || 0) === (b.episode || 0);
+}
+
+export function progressKey(kind: string, id: string, episode?: number) {
+  return `${kind}:${id}:${episode || 0}`;
 }
 
 export function getProgress(
-  type: "movie" | "tv",
-  id: number,
-  videoKey: string,
+  kind: "movie" | "show",
+  id: string,
+  episode?: number,
 ): WatchProgress | null {
-  return (
-    readAll().find(
-      (item) => item.type === type && item.id === id && item.videoKey === videoKey,
-    ) || null
-  );
+  return readAll().find((item) => same(item, { kind, id, episode })) || null;
 }
 
 export function saveProgress(entry: WatchProgress) {
-  const items = readAll().filter(
-    (item) =>
-      !(item.type === entry.type && item.id === entry.id && item.videoKey === entry.videoKey),
-  );
-  // Skip tiny watches / almost finished
+  const items = readAll().filter((item) => !same(item, entry));
   const ratio = entry.duration > 0 ? entry.seconds / entry.duration : 0;
   if (entry.seconds < 8 || ratio > 0.95) {
     writeAll(items);
@@ -65,10 +60,13 @@ export function listContinueWatching(): WatchProgress[] {
     .slice(0, 16);
 }
 
-export function clearProgress(type: "movie" | "tv", id: number, videoKey: string) {
-  writeAll(
-    readAll().filter(
-      (item) => !(item.type === type && item.id === id && item.videoKey === videoKey),
-    ),
-  );
+export function clearProgress(kind: "movie" | "show", id: string, episode?: number) {
+  writeAll(readAll().filter((item) => !same(item, { kind, id, episode })));
+}
+
+export function watchHref(item: WatchProgress) {
+  if (item.kind === "show" && item.episode) {
+    return `/watch/${encodeURIComponent(item.id)}/${item.episode}`;
+  }
+  return `/watch/${encodeURIComponent(item.id)}`;
 }

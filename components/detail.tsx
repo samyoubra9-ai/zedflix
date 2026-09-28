@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { CastRow, MetaChips, type CastGenre, type CastPerson } from "./cast";
+import { IconPlay } from "./icons";
+import { LikeButton, MyListButton } from "./my-list-button";
 import { Spinner } from "./loading";
 import type { Poster } from "./posters";
 
@@ -102,44 +104,68 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
 
   const title = detail?.title || item.title;
   const backdrop = detail?.backdrop || detail?.poster || item.poster;
+  const poster = detail?.poster || item.poster;
   const first = episodes[0];
   const playHref =
     item.kind === "show" && first ? `/watch/${seasonId}/${first.number}` : `/watch/${item.id}`;
+  const listItem: Poster = {
+    id: item.id,
+    title,
+    poster,
+    kind: item.kind,
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 px-4 py-10" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/80 sm:items-start sm:px-6 sm:py-8"
+      onClick={onClose}
+    >
       <article
-        className="modal-in relative w-full max-w-4xl overflow-hidden rounded-lg bg-zinc-950 shadow-2xl"
+        className="modal-in relative max-h-[94dvh] w-full max-w-5xl overflow-y-auto rounded-t-2xl bg-zinc-950 shadow-2xl sm:max-h-[90vh] sm:rounded-xl"
         onClick={(event) => event.stopPropagation()}
       >
+        <div className="sticky top-0 z-20 flex justify-center pt-2 sm:hidden">
+          <span className="h-1 w-10 rounded-full bg-white/25" />
+        </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Fermer"
-          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-lg"
+          className="absolute right-3 top-3 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900/90 text-lg sm:right-5 sm:top-5"
         >
           ×
         </button>
-        <div className="relative h-72 sm:h-96">
-          <img src={backdrop} alt="" className="h-full w-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/20 to-transparent" />
-          <div className="absolute bottom-6 left-6 right-16">
-            <p className="text-xs font-semibold tracking-[0.18em] text-white/80">
+
+        <div className="relative min-h-[42vh] sm:min-h-[48vh] md:min-h-[56vh]">
+          <img src={backdrop} alt="" className="absolute inset-0 h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/55 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-black/20" />
+          <div className="absolute bottom-0 left-0 right-0 px-4 pb-6 sm:px-8 sm:pb-8">
+            <p className="text-[11px] font-semibold tracking-[0.18em] text-white/75 sm:text-xs">
               {item.kind === "show" ? "SÉRIE" : "FILM"}
             </p>
-            <h2 className="mt-2 text-3xl font-bold sm:text-5xl">{title}</h2>
+            <h2 className="mt-1 max-w-3xl text-3xl font-bold sm:text-4xl md:text-5xl">{title}</h2>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              {item.kind === "movie" || first ? (
+                <Link
+                  href={playHref}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-md bg-white px-5 py-2.5 text-sm font-semibold text-black sm:min-h-12 sm:px-6 sm:text-base"
+                >
+                  <IconPlay className="h-4 w-4" />
+                  Lecture
+                </Link>
+              ) : (
+                <span className="inline-flex min-h-11 items-center gap-3 rounded-md bg-white/10 px-5 py-2.5 text-sm">
+                  {loading ? <Spinner className="h-5 w-5" /> : "Lecture indisponible"}
+                </span>
+              )}
+              <MyListButton item={listItem} />
+              <LikeButton item={listItem} />
+            </div>
           </div>
         </div>
-        <div className="px-6 pb-8">
-          {item.kind === "movie" || first ? (
-            <Link href={playHref} className="inline-flex rounded bg-white px-6 py-3 text-lg font-semibold text-black">
-              Lecture
-            </Link>
-          ) : (
-            <span className="inline-flex items-center gap-3 rounded bg-white/10 px-6 py-3 text-sm">
-              {loading ? <Spinner className="h-5 w-5" /> : "Lecture indisponible"}
-            </span>
-          )}
+
+        <div className="px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-10">
           <MetaChips
             genres={detail?.genres}
             directors={detail?.directors}
@@ -147,7 +173,11 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
             runtime={detail?.runtime}
             quality={detail?.quality}
           />
-          {detail?.overview ? <p className="mt-5 max-w-3xl text-base leading-relaxed text-zinc-200">{detail.overview}</p> : null}
+          {detail?.overview ? (
+            <p className="mt-5 max-w-3xl text-[15px] leading-relaxed text-zinc-200 sm:text-base">
+              {detail.overview}
+            </p>
+          ) : null}
           {loading && !detail?.overview ? <div className="mt-5 h-16 w-full max-w-xl rounded skeleton" /> : null}
           {status ? <p className="mt-4 text-sm text-zinc-400">{status}</p> : null}
 
@@ -155,34 +185,59 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
 
           {item.kind === "show" && detail ? (
             <div className="mt-8">
-              <div className="flex gap-2 overflow-x-auto">
-                {detail.seasons.map((season) => (
-                  <button
-                    key={season.id}
-                    type="button"
-                    onClick={() => openSeason(season.id)}
-                    className={`shrink-0 rounded px-4 py-2 text-sm ${season.id === seasonId ? "bg-white text-black" : "bg-white/10"}`}
-                  >
-                    {season.title.replace(/^.+-\s*/, "")}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold">Épisodes</h3>
+                <div className="-mx-1 flex gap-2 overflow-x-auto px-1 [scrollbar-width:none]">
+                  {detail.seasons.map((season) => (
+                    <button
+                      key={season.id}
+                      type="button"
+                      onClick={() => openSeason(season.id)}
+                      className={`min-h-9 shrink-0 rounded-md px-3 py-1.5 text-sm ${
+                        season.id === seasonId ? "bg-white text-black" : "bg-white/10"
+                      }`}
+                    >
+                      {season.title.replace(/^.+-\s*/, "")}
+                    </button>
+                  ))}
+                </div>
               </div>
+
               {episodesLoading ? (
                 <div className="mt-8 flex justify-center">
                   <Spinner />
                 </div>
               ) : (
-                <ul className="mt-4 max-h-72 divide-y divide-white/10 overflow-y-auto">
+                <ul className="mt-5 space-y-3">
                   {episodes.map((episode) => (
                     <li key={episode.number}>
                       <Link
                         href={`/watch/${seasonId}/${episode.number}`}
-                        className="flex items-center justify-between py-3"
+                        className="flex gap-3 rounded-xl bg-white/[0.04] p-2.5 ring-1 ring-white/10 transition hover:bg-white/[0.07] sm:gap-4 sm:p-3"
                       >
-                        <span>
-                          {episode.number}. {episode.title}
+                        <span className="relative h-20 w-[8.5rem] shrink-0 overflow-hidden rounded-md bg-zinc-900 sm:h-24 sm:w-40">
+                          <img
+                            src={backdrop || poster}
+                            alt=""
+                            className="h-full w-full object-cover opacity-80"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/25">
+                            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-black">
+                              <IconPlay className="h-3.5 w-3.5" />
+                            </span>
+                          </span>
+                          <span className="absolute left-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold">
+                            {episode.number}
+                          </span>
                         </span>
-                        <span className="text-sm text-white/70">Lecture</span>
+                        <span className="min-w-0 flex-1 py-0.5">
+                          <span className="block truncate font-medium">
+                            {episode.number}. {episode.title}
+                          </span>
+                          <span className="mt-1 line-clamp-2 text-xs text-zinc-400 sm:text-sm">
+                            {detail.overview || "Appuie pour regarder cet épisode."}
+                          </span>
+                        </span>
                       </Link>
                     </li>
                   ))}
