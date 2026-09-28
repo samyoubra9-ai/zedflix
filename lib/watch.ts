@@ -481,15 +481,37 @@ function extractDirectors(html: string): string[] {
   return [...row.matchAll(/<a[^>]*>([^<]+)<\/a>/g)].map((match) => decodeTitle(match[1])).filter(Boolean);
 }
 
-export async function vidzyPlaylist(id: string) {
+export type WatchServer = {
+  id: string;
+  name: string;
+  src: string;
+};
+
+export type WatchPlayResult = {
+  stream: string;
+  server: string;
+  servers: Array<{ id: string; name: string }>;
+};
+
+/** Resolve a playable stream like the Android app: all VF servers, Vidzy first, auto-fallback. */
+export async function resolvePlaylist(id: string, preferredServer?: string): Promise<WatchPlayResult> {
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
-  const embed = pickVidzy(film.players || {});
-  if (!embed) throw new Error("Version française (VF) indisponible pour ce film");
-  return openVidzy(embed, origin);
+  const servers = listMovieServers(film.players || {});
+  return playFromServers(servers, origin, preferredServer);
 }
 
-export async function vidzyEpisode(seasonId: string, episode: number) {
+/** @deprecated alias kept for older imports */
+export async function vidzyPlaylist(id: string, preferredServer?: string) {
+  const result = await resolvePlaylist(id, preferredServer);
+  return result.stream;
+}
+
+export async function resolveEpisode(
+  seasonId: string,
+  episode: number,
+  preferredServer?: string,
+): Promise<WatchPlayResult> {
   const origin = await catalogOrigin();
   const response = await fetch(`${origin}/engine/ajax/sx.php?id=${encodeURIComponent(seasonId)}`, {
     headers: headers(origin),
@@ -501,10 +523,14 @@ export async function vidzyEpisode(seasonId: string, episode: number) {
     vostfr?: Record<string, Record<string, string>>;
     vo?: Record<string, Record<string, string>>;
   };
-  const key = String(episode);
-  const embed = vidzyUrl(data.vf?.[key]);
-  if (!embed) throw new Error("Version française (VF) indisponible pour cet épisode");
-  return openVidzy(embed, origin);
+  const servers = listEpisodeServers(data.vf?.[String(episode)]);
+  return playFromServers(servers, origin, preferredServer);
+}
+
+/** @deprecated alias kept for older imports */
+export async function vidzyEpisode(seasonId: string, episode: number, preferredServer?: string) {
+  const result = await resolveEpisode(seasonId, episode, preferredServer);
+  return result.stream;
 }
 
 async function filmData(origin: string, id: string) {
@@ -565,8 +591,197 @@ async function episodesFor(origin: string, id: string): Promise<WatchEpisode[]> 
     }));
 }
 
-async function openVidzy(embed: string, origin: string) {
-  const page = await fetch(embed, {
+function langLabel(key: string) {
+  const labels: Record<string, string> = {
+    vff: "TrueFrench",
+    vfq: "French",
+    vf: "VF",
+    truefrench: "TrueFrench",
+    french: "French",
+    default: "VF",
+  };
+  return labels[key.toLowerCase()] || "VF";
+}
+
+function providerLabel(provider: string) {
+  return provider.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function ignoreSource(source: string, href: string) {
+  if (source.trim().toLowerCase() === "dood.stream" && href.includes("/bigwar5/")) return true;
+  return false;
+}
+
+function isDirectMedia(url: string) {
+  return /\.(m3u8|mp4|mkv|webm)(\?|$)/i.test(url) || url.includes(".m3u8");
+}
+
+/** Mirror Android FrenchStreamProvider.getServers for movies (VF only). */
+function listMovieServers(players: Record<string, Record<string, string>>): WatchServer[] {
+  const langOrder = ["vff", "vfq", "vf", "truefrench", "french", "default"];
+  const servers: WatchServer[] = [];
+  let index = 0;
+
+  for (const [provider, langMap] of Object.entries(players)) {
+    const seen = new Set<string>();
+    const defaultUrl = langMap.default || langMap.Default;
+
+    const frenchEntries = Object.entries(langMap)
+      .filter(([key]) => key.toLowerCase() !== "default" && isFrenchAudioKey(key))
+      .sort(([a], [b]) => {
+        const ai = langOrder.indexOf(a.toLowerCase());
+        const bi = langOrder.indexOf(b.toLowerCase());
+        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      });
+
+    for (const [lang, url] of frenchEntries) {
+      if (!url || (!url.startsWith("http") && !url.trim()) || ignoreSource(provider, url) || seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      servers.push({
+        id: `vid${index++}`,
+        name: `${providerLabel(provider)} (${langLabel(lang)})`,
+        src: url,
+      });
+    }
+
+    const keys = Object.keys(langMap).map((key) => key.toLowerCase());
+    const hasForeignSibling = keys.some((key) => key === "vostfr" || key === "vost" || key === "vo");
+    if (
+      !hasForeignSibling &&
+      seen.size === 0 &&
+      defaultUrl &&
+      defaultUrl.startsWith("http") &&
+      !ignoreSource(provider, defaultUrl)
+    ) {
+      servers.push({
+        id: `vid${index++}`,
+        name: `${providerLabel(provider)} (VF)`,
+        src: defaultUrl,
+      });
+    }
+  }
+
+  return sortServers(servers);
+}
+
+/** Mirror Android episode VF map: every host in vf[episode], never vostfr/vo. */
+function listEpisodeServers(block: Record<string, string> | undefined): WatchServer[] {
+  if (!block) return [];
+  const servers: WatchServer[] = [];
+  let index = 0;
+  for (const [provider, url] of Object.entries(block)) {
+    if (!url?.startsWith("http") || ignoreSource(provider, url)) continue;
+    servers.push({
+      id: `ep${index++}`,
+      name: `${providerLabel(provider)} (VF)`,
+      src: url,
+    });
+  }
+  return sortServers(servers);
+}
+
+/**
+ * Prefer the same hosts the Android app tends to play first.
+ * FrenchStream often exposes only `default` URLs: Vidzy's default is frequently
+ * English VO, while premium/fsvid is the real French dub.
+ */
+function sortServers(servers: WatchServer[]) {
+  const score = (server: WatchServer) => {
+    const hay = `${server.name} ${server.src}`.toLowerCase();
+    if (hay.includes("premium") || hay.includes("fsvid")) return 0;
+    if (hay.includes("uqload")) return 1;
+    if (hay.includes("vidoza")) return 2;
+    if (hay.includes("filemoon") || hay.includes("filmoon") || hay.includes("streamwish")) return 3;
+    if (hay.includes("vidzy")) return 8; // often English when only `default` exists
+    if (hay.includes("dood") || hay.includes("voe")) return 9;
+    return 5;
+  };
+  // Stable sort: keep API order when scores tie (like the Android first() pick).
+  return servers
+    .map((server, index) => ({ server, index }))
+    .sort((a, b) => {
+      const diff = score(a.server) - score(b.server);
+      return diff !== 0 ? diff : a.index - b.index;
+    })
+    .map(({ server }) => server);
+}
+
+async function playFromServers(
+  servers: WatchServer[],
+  origin: string,
+  preferredServer?: string,
+): Promise<WatchPlayResult> {
+  if (!servers.length) {
+    throw new Error("Version française (VF) indisponible pour ce titre");
+  }
+
+  const ordered = preferredServer
+    ? [
+        ...servers.filter((server) => server.id === preferredServer),
+        ...servers.filter((server) => server.id !== preferredServer),
+      ]
+    : servers;
+
+  const errors: string[] = [];
+  for (const server of ordered) {
+    try {
+      const stream = await openEmbed(server.src, origin);
+      if (!stream) {
+        errors.push(`${server.name}: illisible`);
+        continue;
+      }
+      return {
+        stream,
+        server: server.id,
+        servers: servers.map(({ id, name }) => ({ id, name })),
+      };
+    } catch (error) {
+      errors.push(`${server.name}: ${error instanceof Error ? error.message : "échec"}`);
+    }
+  }
+
+  throw new Error(
+    errors.length
+      ? `Aucun serveur VF lisible (${errors.slice(0, 3).join(" · ")})`
+      : "Version française (VF) indisponible pour ce titre",
+  );
+}
+
+async function followBridge(url: string, origin: string) {
+  const needsBridge =
+    /kokoflix\.lol|kakaflix\.lol|newPlayer\.php/i.test(url) ||
+    /mysync\.mov\/stream\//i.test(url);
+  if (!needsBridge) return url;
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Referer: `${origin}/`,
+      "Accept-Language": "fr-FR,fr;q=0.9",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
+  const finalUrl = response.url || url;
+  if (finalUrl !== url && finalUrl.startsWith("http")) return finalUrl;
+
+  const html = await response.text();
+  const redirected =
+    html.match(/window\.location\.replace\(["'](https?:[^"']+)["']\)/)?.[1] ||
+    html.match(/window\.location\.href\s*=\s*["'](https?:[^"']+)["']/)?.[1] ||
+    html.match(/src=["'](https?:[^"']+)["']/)?.[1];
+  return redirected?.startsWith("http") ? redirected : finalUrl;
+}
+
+async function openEmbed(embed: string, origin: string) {
+  if (isDirectMedia(embed)) return embed;
+
+  const resolved = await followBridge(embed, origin);
+  if (isDirectMedia(resolved)) return resolved;
+
+  const page = await fetch(resolved, {
     headers: {
       "User-Agent": USER_AGENT,
       Referer: `${origin}/`,
@@ -574,10 +789,23 @@ async function openVidzy(embed: string, origin: string) {
     },
     cache: "no-store",
   });
-  if (!page.ok) throw new Error("Le lecteur Vidzy n’a pas répondu");
+  if (!page.ok) throw new Error("Le lecteur n’a pas répondu");
   const html = await page.text();
-  const stream = decodePlayerSource(html, embed) || decodePackedSource(html);
-  if (!stream) throw new Error("La vidéo Vidzy est illisible");
+  const unpacked = unpackEvalScript(html) || "";
+  const stream =
+    decodePlayerSource(html, resolved) ||
+    decodePlayerSource(unpacked, resolved) ||
+    decodeXorPayloads(unpacked || html, resolved) ||
+    pickRealMediaUrl(decodePackedSource(unpacked || html)) ||
+    pickRealMediaUrl(decodePackedSource(html)) ||
+    pickRealMediaUrl(
+      (unpacked || html).match(/https?:\/\/[^"'\\\s]+\/[^"'\\\s]+\.m3u8[^"'\\\s]*/)?.[0] || null,
+    ) ||
+    pickRealMediaUrl(
+      (unpacked || html).match(/https?:\/\/[^"'\\\s]+\/[^"'\\\s]+\.mp4[^"'\\\s]*/)?.[0] || null,
+    ) ||
+    null;
+  if (!stream) throw new Error("La vidéo est illisible");
   return stream;
 }
 
@@ -597,7 +825,7 @@ export async function fetchMedia(url: string) {
   let referer = "https://vidzy.org/";
   try {
     const host = new URL(url).hostname.toLowerCase();
-    if (host.includes("vidzy")) referer = `https://${host}/`;
+    referer = `https://${host}/`;
   } catch {
     // keep default
   }
@@ -630,10 +858,6 @@ export function mediaPath(url: string) {
   return `/api/watch/media?url=${encodeURIComponent(url)}`;
 }
 
-function vidzyUrl(block: Record<string, string> | undefined) {
-  const url = block?.vidzy || block?.Vidzy;
-  return url?.startsWith("http") ? url : null;
-}
 
 function isFrenchAudioKey(key: string) {
   const normalized = key.trim().toLowerCase();
@@ -651,32 +875,59 @@ function isFrenchAudioKey(key: string) {
   );
 }
 
-function pickVidzy(players: Record<string, Record<string, string>>) {
-  const langs = players.vidzy || players.Vidzy;
-  if (!langs) return null;
-  const preferred = ["vff", "vfq", "vf", "truefrench", "french"];
-  for (const key of preferred) {
-    const url = langs[key] || langs[key.toUpperCase()];
-    if (url?.startsWith("http")) return url;
+
+
+function unpackEvalScript(html: string) {
+  const packed = html.match(
+    /eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('((?:\\'|[^'])*)',(\d+),(\d+),'((?:\\'|[^'])*)'\.split\('\|'\)\)\)/,
+  );
+  if (!packed) return null;
+  try {
+    const payload = packed[1].replace(/\\'/g, "'");
+    const radix = Number(packed[2]);
+    const count = Number(packed[3]);
+    const dictionary = packed[4].replace(/\\'/g, "'").split("|");
+    if (!Number.isFinite(radix) || !Number.isFinite(count) || !dictionary.length) return null;
+    let unpacked = payload;
+    for (let i = count - 1; i >= 0; i -= 1) {
+      const token = dictionary[i];
+      if (!token) continue;
+      unpacked = unpacked.replace(new RegExp(`\\b${i.toString(radix)}\\b`, "g"), token);
+    }
+    return unpacked;
+  } catch {
+    return null;
   }
-  for (const [key, url] of Object.entries(langs)) {
-    if (isFrenchAudioKey(key) && url?.startsWith("http")) return url;
+}
+
+function pickRealMediaUrl(url: string | null | undefined) {
+  if (!url?.startsWith("http")) return null;
+  if (/\/troll\//i.test(url)) return null;
+  return url;
+}
+
+function decodeXorPayloads(source: string, link: string) {
+  const host = (() => {
+    try {
+      return new URL(link).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  if (!host) return null;
+  const payloads = [
+    ...source.matchAll(/\(function\s*\(\s*s\s*\)\s*\{[\s\S]*?\}\)\(\s*"([A-Za-z0-9+/=]+)"\s*\)/g),
+  ].map((match) => match[1]);
+  for (const payload of payloads) {
+    if (payload.length < 40) continue;
+    const decoded = xorDecodePayload(payload, host);
+    const real = pickRealMediaUrl(decoded);
+    if (real) return real;
   }
-  // last resort: only allow "default" when there is no VO/VOSTFR sibling
-  // (French-only uploads sometimes expose a single default stream).
-  const keys = Object.keys(langs).map((key) => key.toLowerCase());
-  const hasForeignSibling = keys.some((key) => key === "vostfr" || key === "vost" || key === "vo");
-  const defaultUrl = langs.default || langs.Default;
-  if (!hasForeignSibling && defaultUrl?.startsWith("http")) return defaultUrl;
   return null;
 }
 
-function decodePlayerSource(html: string, link: string) {
-  const payload = html.match(
-    /sources:\s*\[\{src:\s*\(function\(s\)\{[\s\S]*?\}\)\("([A-Za-z0-9+/=]+)"\)/,
-  )?.[1];
-  if (!payload) return null;
-  const host = new URL(link).hostname.toLowerCase();
+function xorDecodePayload(payload: string, host: string) {
   let hash = 0;
   for (const char of host) hash = (hash + char.charCodeAt(0)) & 255;
   const reversed = Buffer.from(payload, "base64").toString("latin1").split("").reverse().join("");
@@ -686,6 +937,18 @@ function decodePlayerSource(html: string, link: string) {
     decoded += String.fromCharCode(reversed.charCodeAt(index) ^ key);
   }
   return decoded.startsWith("http") ? decoded : null;
+}
+
+function decodePlayerSource(html: string, link: string) {
+  const payload = html.match(
+    /sources:\s*\[\{src:\s*\(function\(s\)\{[\s\S]*?\}\)\("([A-Za-z0-9+/=]+)"\)/,
+  )?.[1];
+  if (!payload) return null;
+  try {
+    return pickRealMediaUrl(xorDecodePayload(payload, new URL(link).hostname.toLowerCase()));
+  } catch {
+    return null;
+  }
 }
 
 /** Fallback for packed JWPlayer sources (same idea as the Android VidzyExtractor). */
@@ -711,8 +974,11 @@ function decodePackedSource(html: string) {
       unpacked = unpacked.replace(pattern, token);
     }
     return (
-      unpacked.match(/sources:\s*\[\s*\{\s*(?:file|src)\s*:\s*["'](https?:[^"']+)["']/)?.[1] ||
-      unpacked.match(/src\s*:\s*["'](https?:[^"']+)["']/)?.[1] ||
+      pickRealMediaUrl(
+        unpacked.match(/sources:\s*\[\s*\{\s*(?:file|src)\s*:\s*["'](https?:[^"']+)["']/)?.[1],
+      ) ||
+      pickRealMediaUrl(unpacked.match(/src\s*:\s*["'](https?:[^"']+)["']/)?.[1]) ||
+      decodeXorPayloads(unpacked, "https://fsvid.lol/") ||
       null
     );
   } catch {

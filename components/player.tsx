@@ -23,7 +23,8 @@ import {
 } from "@/lib/watch-progress";
 
 type QualityOption = { index: number; label: string };
-type Menu = null | "root" | "speed" | "quality";
+type Menu = null | "root" | "speed" | "quality" | "server";
+type ServerOption = { id: string; name: string };
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 
@@ -84,6 +85,9 @@ export function Player({
   const [skipFlash, setSkipFlash] = useState<null | -10 | 10>(null);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [servers, setServers] = useState<ServerOption[]>([]);
+  const [activeServer, setActiveServer] = useState<string | null>(null);
+  const [preferredServer, setPreferredServer] = useState<string | null>(null);
 
   const showControls = useCallback((sticky = false) => {
     setControls(true);
@@ -94,6 +98,12 @@ export function Player({
       setControls(false);
     }, 3200);
   }, []);
+
+  useEffect(() => {
+    setPreferredServer(null);
+    setActiveServer(null);
+    setServers([]);
+  }, [id, episode]);
 
   useEffect(() => {
     const kindParam = episode ? "show" : "movie";
@@ -117,6 +127,18 @@ export function Player({
     }
   }, [kind, id, episode, reloadKey]);
 
+  const switchServer = useCallback((next: string) => {
+    if (!next || next === preferredServer || next === activeServer) {
+      setMenu(null);
+      return;
+    }
+    setPreferredServer(next);
+    setActiveServer(next);
+    setMenu(null);
+    setStatus("");
+    setLoading(true);
+  }, [preferredServer, activeServer]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -128,19 +150,27 @@ export function Player({
     setQuality(-1);
     let hls: Hls | null = null;
     let stop = false;
-    const path = episode
-      ? `/api/watch/play?id=${encodeURIComponent(id)}&episode=${episode}`
-      : `/api/watch/play?id=${encodeURIComponent(id)}`;
+    const params = new URLSearchParams({ id });
+    if (episode) params.set("episode", String(episode));
+    if (preferredServer) params.set("server", preferredServer);
+    const path = `/api/watch/play?${params.toString()}`;
 
     fetch(path)
       .then(async (response) => {
-        const data = (await response.json()) as { src?: string; error?: string };
+        const data = (await response.json()) as {
+          src?: string;
+          error?: string;
+          server?: string;
+          servers?: ServerOption[];
+        };
         if (stop) return;
         if (!response.ok || !data.src) {
           setLoading(false);
           setStatus(data.error || "Lecture impossible");
           return;
         }
+        if (Array.isArray(data.servers)) setServers(data.servers);
+        if (data.server) setActiveServer(data.server);
 
         const onLevels = (levels: Level[]) => {
           const options = levels
@@ -154,6 +184,28 @@ export function Player({
 
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = data.src;
+          const pickNativeFrench = () => {
+            const tracks = (video as HTMLVideoElement & {
+              audioTracks?: { length: number; [index: number]: { language?: string; label?: string; enabled: boolean } };
+            }).audioTracks;
+            if (!tracks || !tracks.length) return;
+            for (let index = 0; index < tracks.length; index += 1) {
+              const track = tracks[index];
+              const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
+              const isFrench =
+                hay.startsWith("fr") ||
+                hay.includes("french") ||
+                hay.includes("fran") ||
+                hay.includes("vf");
+              track.enabled = isFrench ? true : false;
+            }
+            const anyFrench = Array.from({ length: tracks.length }, (_, index) => tracks[index]).some((track) => {
+              const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
+              return hay.startsWith("fr") || hay.includes("french") || hay.includes("fran") || hay.includes("vf");
+            });
+            if (!anyFrench && tracks[0]) tracks[0].enabled = true;
+          };
+          video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
         } else if (Hls.isSupported()) {
           hls = new Hls({
             enableWorker: true,
@@ -162,7 +214,21 @@ export function Player({
           hlsRef.current = hls;
           hls.loadSource(data.src);
           hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, (_event, info) => onLevels(info.levels));
+          hls.on(Hls.Events.MANIFEST_PARSED, (_event, info) => {
+            onLevels(info.levels);
+            const tracks = hls?.audioTracks || [];
+            const french = tracks.findIndex((track) => {
+              const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
+              return (
+                hay.startsWith("fr") ||
+                hay.includes("french") ||
+                hay.includes("fran") ||
+                hay.includes("vf") ||
+                hay.includes("truefrench")
+              );
+            });
+            if (french >= 0 && hls) hls.audioTrack = french;
+          });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
           hls.on(Hls.Events.ERROR, (_event, info) => {
             if (info.fatal) {
@@ -195,7 +261,7 @@ export function Player({
       video.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey]);
+  }, [id, episode, reloadKey, preferredServer]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -617,7 +683,7 @@ export function Player({
                     <IconSettings className="h-5 w-5" />
                   </button>
                   {menu ? (
-                    <div className="absolute bottom-12 right-0 w-48 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur">
+                    <div className="absolute bottom-12 right-0 w-56 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur">
                       {menu === "root" ? (
                         <>
                           <button
@@ -639,6 +705,18 @@ export function Player({
                                 {quality < 0
                                   ? "Automatique"
                                   : qualities.find((item) => item.index === quality)?.label || "—"}
+                              </span>
+                            </button>
+                          ) : null}
+                          {servers.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => setMenu("server")}
+                              className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
+                            >
+                              <span>Serveur</span>
+                              <span className="max-w-[7rem] truncate text-zinc-400">
+                                {servers.find((item) => item.id === activeServer)?.name || "—"}
                               </span>
                             </button>
                           ) : null}
@@ -700,6 +778,30 @@ export function Player({
                               <span>{item.label}</span>
                               {quality === item.index ? (
                                 <IconCheck className="h-4 w-4 text-[#e50914]" />
+                              ) : null}
+                            </button>
+                          ))}
+                        </>
+                      ) : null}
+                      {menu === "server" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setMenu("root")}
+                            className="w-full px-3 py-2 text-left text-xs text-zinc-500"
+                          >
+                            ← Serveur
+                          </button>
+                          {servers.map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => switchServer(item.id)}
+                              className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
+                            >
+                              <span className="truncate pr-2">{item.name}</span>
+                              {item.id === activeServer ? (
+                                <IconCheck className="h-4 w-4 shrink-0 text-[#e50914]" />
                               ) : null}
                             </button>
                           ))}
