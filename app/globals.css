@@ -141,7 +141,8 @@ html.tv-mode .tv-focus {
   transition:
     box-shadow 120ms ease,
     transform 120ms ease,
-    background-color 120ms ease;
+    background-color 120ms ease,
+    filter 120ms ease;
 }
 
 html.tv-mode .tv-focus:focus,
@@ -155,10 +156,39 @@ html.tv-mode .tv-focus:focus-visible {
   z-index: 5;
 }
 
+html.tv-mode .tv-channel.tv-focus:focus,
+html.tv-mode .tv-channel.tv-focus:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.06);
+}
+
 html.tv-mode .tv-rail .tv-focus:focus,
 html.tv-mode .tv-rail .tv-focus:focus-visible {
   transform: none;
   background: rgba(255, 255, 255, 0.12);
+}
+
+html.tv-mode .tv-player-btn.tv-focus:focus,
+html.tv-mode .tv-player-btn.tv-focus:focus-visible {
+  transform: scale(1.08);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.tv-live-dot {
+  animation: tv-live-pulse 1.4s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.55);
+}
+
+@keyframes tv-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(229, 9, 20, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 9, 20, 0);
+  }
 }
 
 /* Hide mobile sticky bottom chrome leftovers if any leak through */

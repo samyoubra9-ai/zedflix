@@ -8,6 +8,7 @@ import {
   IconFilm,
   IconHome,
   IconList,
+  IconLive,
   IconLogout,
   IconSearch,
   IconSettings,
@@ -191,6 +192,7 @@ const LINKS = [
   { href: "/browse", label: "Accueil", Icon: IconHome },
   { href: "/films", label: "Films", Icon: IconFilm },
   { href: "/series", label: "Séries", Icon: IconTv },
+  { href: "/tv", label: "TV", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
   { href: "/search", label: "Recherche", Icon: IconSearch },
 ] as const;
@@ -364,7 +366,7 @@ export function SiteNav() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-black/95 backdrop-blur-md md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="grid h-[3.75rem] grid-cols-5">
+        <div className="grid h-[3.75rem] grid-cols-6">
           {LINKS.map(({ href, label, Icon }) => {
             const active = linkActive(pathname, href);
             return (

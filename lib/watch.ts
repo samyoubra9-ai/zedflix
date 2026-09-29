@@ -948,9 +948,16 @@ export function allowedMediaUrl(value: string) {
 
 export async function fetchMedia(url: string) {
   let referer = "https://vidzy.org/";
+  let origin = "https://vidzy.org";
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
     referer = `https://${host}/`;
+    origin = `https://${host}`;
+    if (host.includes("vavoo") || url.includes("/hls/") || url.includes("sunshine")) {
+      referer = "https://vavoo.to/";
+      origin = "https://vavoo.to";
+    }
   } catch {
     // keep default
   }
@@ -958,6 +965,8 @@ export async function fetchMedia(url: string) {
     headers: {
       "User-Agent": USER_AGENT,
       Referer: referer,
+      Origin: origin,
+      Accept: "*/*",
     },
     cache: "no-store",
   });

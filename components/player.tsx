@@ -21,6 +21,9 @@ import {
   getProgress,
   saveProgress,
 } from "@/lib/watch-progress";
+import { useTvMode } from "@/hooks/use-tv-mode";
+import { TvSpatialNav } from "@/components/tv/spatial-nav";
+import { useRouter } from "next/navigation";
 
 type QualityOption = { index: number; label: string };
 type Menu = null | "root" | "speed" | "quality" | "server";
@@ -52,12 +55,16 @@ export function Player({
   id,
   episode,
   back,
+  live = false,
 }: {
   id: string;
   episode?: number;
   back: string;
+  live?: boolean;
 }) {
-  const kind = episode ? "show" : "movie";
+  const kind = live ? "movie" : episode ? "show" : "movie";
+  const tv = useTvMode();
+  const router = useRouter();
   const rootRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -94,12 +101,12 @@ export function Player({
   const showControls = useCallback((sticky = false) => {
     setControls(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    if (sticky) return;
+    if (sticky || tv) return;
     hideTimer.current = window.setTimeout(() => {
       setMenu(null);
       setControls(false);
     }, 3200);
-  }, []);
+  }, [tv]);
 
   useEffect(() => {
     setPreferredServer(null);
@@ -110,6 +117,10 @@ export function Player({
   }, [id, episode]);
 
   useEffect(() => {
+    if (live) {
+      setTitle("Direct");
+      return;
+    }
     const kindParam = episode ? "show" : "movie";
     fetch(`/api/watch/title?id=${encodeURIComponent(id)}&kind=${kindParam}`)
       .then(async (response) => {
@@ -120,16 +131,20 @@ export function Player({
         }
       })
       .catch(() => undefined);
-  }, [id, episode]);
+  }, [id, episode, live]);
 
   useEffect(() => {
+    if (live) {
+      setResumeAt(null);
+      return;
+    }
     const saved = getProgress(kind, id, episode);
     if (saved && saved.seconds > 30 && saved.duration > 0 && saved.seconds / saved.duration < 0.95) {
       setResumeAt(saved.seconds);
     } else {
       setResumeAt(null);
     }
-  }, [kind, id, episode, reloadKey]);
+  }, [kind, id, episode, reloadKey, live]);
 
   const switchServer = useCallback((next: string) => {
     if (!next || next === activeServer) {
@@ -159,10 +174,14 @@ export function Player({
     let stop = false;
     setEnglishPrompt(false);
     const params = new URLSearchParams({ id });
-    if (episode) params.set("episode", String(episode));
-    if (preferredServer) params.set("server", preferredServer);
-    if (allowEnglish) params.set("allowEnglish", "1");
-    const path = `/api/watch/play?${params.toString()}`;
+    if (!live) {
+      if (episode) params.set("episode", String(episode));
+      if (preferredServer) params.set("server", preferredServer);
+      if (allowEnglish) params.set("allowEnglish", "1");
+    }
+    const path = live
+      ? `/api/watch/live/play?${params.toString()}`
+      : `/api/watch/play?${params.toString()}`;
 
     fetch(path)
       .then(async (response) => {
@@ -173,10 +192,14 @@ export function Player({
           servers?: ServerOption[];
           needsEnglishChoice?: boolean;
           language?: string;
+          title?: string;
+          poster?: string;
         };
         if (stop) return;
-        if (Array.isArray(data.servers)) setServers(data.servers);
-        if (data.needsEnglishChoice) {
+        if (live && data.title) setTitle(data.title);
+        if (live && data.poster) setPoster(data.poster);
+        if (!live && Array.isArray(data.servers)) setServers(data.servers);
+        if (!live && data.needsEnglishChoice) {
           setLoading(false);
           setEnglishPrompt(true);
           setStatus("");
@@ -227,12 +250,33 @@ export function Player({
           hls = new Hls({
             enableWorker: true,
             startLevel: -1,
+            capLevelToPlayerSize: !live,
+            maxBufferLength: live ? 20 : 30,
+            maxMaxBufferLength: live ? 40 : 60,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 8,
+            liveDurationInfinity: live,
+            highBufferWatchdogPeriod: live ? 1 : 2,
+            maxBufferHole: live ? 1.5 : 0.5,
+            nudgeMaxRetry: live ? 8 : 3,
+            forceKeyFrameOnDiscontinuity: true,
           });
           hlsRef.current = hls;
           hls.loadSource(data.src);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, (_event, info) => {
             onLevels(info.levels);
+            if (live && hls && info.levels.length > 1) {
+              // Prefer AVC levels when available (HEVC often = son sans image).
+              const avc = info.levels.findIndex((level) => {
+                const codec = `${level.videoCodec || ""}`.toLowerCase();
+                return codec.includes("avc") || codec.includes("h264");
+              });
+              if (avc >= 0) {
+                hls.startLevel = avc;
+                hls.currentLevel = avc;
+              }
+            }
             const tracks = hls?.audioTracks || [];
             const french = tracks.findIndex((track) => {
               const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
@@ -248,11 +292,27 @@ export function Player({
           });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
           hls.on(Hls.Events.ERROR, (_event, info) => {
-            if (info.fatal) {
-              setLoading(false);
-              setBuffering(false);
-              setStatus("Le lecteur n’a pas pu lire la vidéo.");
+            if (!info.fatal || !hls) {
+              if (live && info.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                try {
+                  hls?.startLoad();
+                } catch {
+                  // ignore
+                }
+              }
+              return;
             }
+            if (info.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad();
+              return;
+            }
+            if (info.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError();
+              return;
+            }
+            setLoading(false);
+            setBuffering(false);
+            setStatus("Le lecteur n’a pas pu lire la vidéo.");
           });
         } else {
           setLoading(false);
@@ -278,7 +338,7 @@ export function Player({
       video.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey, preferredServer, allowEnglish]);
+  }, [id, episode, reloadKey, preferredServer, allowEnglish, live]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -335,6 +395,7 @@ export function Player({
   }, []);
 
   useEffect(() => {
+    if (live) return;
     const timer = window.setInterval(() => {
       const video = videoRef.current;
       if (!video || !video.duration) return;
@@ -350,7 +411,7 @@ export function Player({
       });
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [kind, id, episode, title, poster]);
+  }, [kind, id, episode, title, poster, live]);
 
   useEffect(() => {
     function onFs() {
@@ -364,38 +425,74 @@ export function Player({
     function onKey(event: KeyboardEvent) {
       const video = videoRef.current;
       if (!video) return;
-      const tag = (event.target as HTMLElement)?.tagName;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      // Remote Back / Escape → leave player.
+      if (
+        event.key === "Escape" ||
+        event.key === "Backspace" ||
+        event.key === "BrowserBack" ||
+        event.key === "GoBack"
+      ) {
+        if (menu) {
+          event.preventDefault();
+          setMenu(null);
+          return;
+        }
+        event.preventDefault();
+        router.push(back);
+        return;
+      }
+
+      // On TV, arrows move focus between controls — don't seek/volume-hijack.
+      if (
+        tv &&
+        (event.key === "ArrowUp" ||
+          event.key === "ArrowDown" ||
+          event.key === "ArrowLeft" ||
+          event.key === "ArrowRight")
+      ) {
+        showControls(true);
+        return;
+      }
+
       showControls();
-      if (event.key === " " || event.key === "k") {
+      if (
+        event.key === " " ||
+        event.key === "k" ||
+        event.key === "MediaPlayPause" ||
+        event.code === "MediaPlayPause"
+      ) {
+        // Space on a focused TV button activates the button via spatial-nav.
+        if (tv && event.key === " " && target?.hasAttribute("data-tv-focus")) return;
         event.preventDefault();
         if (video.paused) video.play().catch(() => undefined);
         else video.pause();
-      } else if (event.key === "ArrowRight") {
+      } else if (!live && event.key === "ArrowRight") {
         event.preventDefault();
         skipBy(10);
-      } else if (event.key === "ArrowLeft") {
+      } else if (!live && event.key === "ArrowLeft") {
         event.preventDefault();
         skipBy(-10);
-      } else if (event.key === "ArrowUp") {
+      } else if (!tv && event.key === "ArrowUp") {
         event.preventDefault();
         video.volume = Math.min(1, video.volume + 0.05);
         video.muted = false;
-      } else if (event.key === "ArrowDown") {
+      } else if (!tv && event.key === "ArrowDown") {
         event.preventDefault();
         video.volume = Math.max(0, video.volume - 0.05);
       } else if (event.key === "m") {
         video.muted = !video.muted;
       } else if (event.key === "f") {
         toggleFullscreen();
-      } else if (event.key === "Escape") {
-        setMenu(null);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showControls]);
+  }, [showControls, tv, live, back, menu, router]);
 
   function skipBy(delta: number) {
     const video = videoRef.current;
@@ -523,9 +620,13 @@ export function Player({
   return (
     <main
       ref={rootRef}
-      className="relative flex h-[100dvh] flex-col overflow-hidden bg-black text-white select-none"
+      data-tv-zone="player"
+      className={`relative flex h-[100dvh] flex-col overflow-hidden bg-black text-white select-none ${
+        tv ? "tv-player" : ""
+      }`}
       onMouseMove={() => showControls()}
     >
+      {tv ? <TvSpatialNav enabled /> : null}
       <div className="relative min-h-0 flex-1" onPointerUp={onStagePointer}>
         <video
           ref={videoRef}
@@ -634,7 +735,7 @@ export function Player({
         <div
           data-controls
           className={`absolute inset-0 z-20 transition-opacity duration-300 ${
-            controls || !playing || menu || resumeAt || status || englishPrompt
+            controls || !playing || menu || resumeAt || status || englishPrompt || tv
               ? "opacity-100"
               : "pointer-events-none opacity-0"
           }`}
@@ -643,79 +744,143 @@ export function Player({
 
           <div
             data-controls
-            className="absolute inset-x-0 top-0 flex items-center gap-3 px-3 pb-8 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5"
+            className={`absolute inset-x-0 top-0 flex items-center gap-3 px-3 pb-8 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5 ${
+              tv ? "px-8 pt-8" : ""
+            }`}
           >
             <Link
               href={back}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white ring-1 ring-white/10 backdrop-blur"
+              {...(tv ? { "data-tv-focus": true, "data-tv-autofocus": true } : {})}
+              className={`tv-focus tv-player-btn flex items-center justify-center rounded-full bg-black/40 text-white ring-1 ring-white/10 backdrop-blur outline-none ${
+                tv ? "h-14 w-14" : "h-10 w-10"
+              }`}
               aria-label="Retour"
             >
-              <IconBack className="h-5 w-5" />
+              <IconBack className={tv ? "h-6 w-6" : "h-5 w-5"} />
             </Link>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold sm:text-base">{title}</p>
-              <p className="text-[11px] tracking-[0.18em] text-[#e50914]">MINUIT</p>
+              <p className={`truncate font-semibold ${tv ? "text-xl" : "text-sm sm:text-base"}`}>{title}</p>
+              <p className="inline-flex items-center gap-2 text-[11px] tracking-[0.18em] text-[#e50914]">
+                {live ? (
+                  <>
+                    <span className="tv-live-dot h-1.5 w-1.5 rounded-full bg-[#e50914]" />
+                    DIRECT
+                  </>
+                ) : (
+                  "MINUIT"
+                )}
+              </p>
             </div>
           </div>
 
           <div
             data-controls
-            className="absolute inset-x-0 bottom-0 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-16 sm:px-5"
+            className={`absolute inset-x-0 bottom-0 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-16 sm:px-5 ${
+              tv ? "px-8 pb-10" : ""
+            }`}
           >
-            <div
-              ref={seekBarRef}
-              className="group relative h-1.5 cursor-pointer rounded-full bg-white/20"
-              onPointerDown={onSeekPointer}
-            >
+            {!live ? (
               <div
-                className="absolute inset-y-0 left-0 rounded-full bg-white/35"
-                style={{ width: `${bufferedPct}%` }}
-              />
-              <div
-                className="absolute inset-y-0 left-0 rounded-full bg-[#e50914]"
-                style={{ width: `${progress}%` }}
-              />
-              <span
-                className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#e50914] opacity-0 shadow transition group-hover:opacity-100"
-                style={{ left: `${progress}%` }}
-              />
-            </div>
-
-            <div className="mt-3 flex items-center gap-2 sm:gap-3">
-              <button type="button" onClick={togglePlay} className="rounded-full p-2 hover:bg-white/10" aria-label="Lecture">
-                {playing ? <IconPause className="h-6 w-6" /> : <IconPlay className="h-6 w-6" />}
-              </button>
-              <button type="button" onClick={() => skipBy(-10)} className="rounded-full p-2 hover:bg-white/10" aria-label="-10s">
-                <IconSkipBack className="h-5 w-5" />
-              </button>
-              <button type="button" onClick={() => skipBy(10)} className="rounded-full p-2 hover:bg-white/10" aria-label="+10s">
-                <IconSkipForward className="h-5 w-5" />
-              </button>
-
-              <div className="hidden items-center gap-2 sm:flex">
-                <button type="button" onClick={toggleMute} className="rounded-full p-2 hover:bg-white/10">
-                  {muted || volume === 0 ? <IconMute className="h-5 w-5" /> : <IconVolume className="h-5 w-5" />}
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={muted ? 0 : volume}
-                  onChange={(event) => setVol(Number(event.target.value))}
-                  className="h-1 w-24 cursor-pointer accent-[#e50914]"
+                ref={seekBarRef}
+                className="group relative h-1.5 cursor-pointer rounded-full bg-white/20"
+                onPointerDown={onSeekPointer}
+              >
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-white/35"
+                  style={{ width: `${bufferedPct}%` }}
+                />
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-[#e50914]"
+                  style={{ width: `${progress}%` }}
+                />
+                <span
+                  className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#e50914] opacity-0 shadow transition group-hover:opacity-100"
+                  style={{ left: `${progress}%` }}
                 />
               </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <span className="inline-flex items-center gap-2 rounded-full bg-[#e50914]/20 px-3 py-1 text-xs font-semibold tracking-wide text-[#ff6b73] ring-1 ring-[#e50914]/40">
+                  <span className="tv-live-dot h-2 w-2 rounded-full bg-[#e50914]" />
+                  EN DIRECT
+                </span>
+                <span className="text-xs text-zinc-400">Flux live · pas de timeline</span>
+              </div>
+            )}
 
-              <p className="ml-1 text-xs tabular-nums text-zinc-300 sm:text-sm">
-                {formatTime(current)} <span className="text-zinc-500">/</span> {formatTime(duration)}
-              </p>
+            <div className={`mt-3 flex items-center gap-2 sm:gap-3 ${tv ? "mt-5 gap-4" : ""}`}>
+              <button
+                type="button"
+                {...(tv ? { "data-tv-focus": true } : {})}
+                onClick={togglePlay}
+                className={`tv-focus tv-player-btn rounded-full outline-none hover:bg-white/10 ${
+                  tv ? "bg-white/10 p-4" : "p-2"
+                }`}
+                aria-label="Lecture"
+              >
+                {playing ? <IconPause className={tv ? "h-8 w-8" : "h-6 w-6"} /> : <IconPlay className={tv ? "h-8 w-8" : "h-6 w-6"} />}
+              </button>
+              {!live ? (
+                <>
+                  <button
+                    type="button"
+                    {...(tv ? { "data-tv-focus": true } : {})}
+                    onClick={() => skipBy(-10)}
+                    className={`tv-focus tv-player-btn rounded-full outline-none hover:bg-white/10 ${tv ? "p-3" : "p-2"}`}
+                    aria-label="-10s"
+                  >
+                    <IconSkipBack className={tv ? "h-6 w-6" : "h-5 w-5"} />
+                  </button>
+                  <button
+                    type="button"
+                    {...(tv ? { "data-tv-focus": true } : {})}
+                    onClick={() => skipBy(10)}
+                    className={`tv-focus tv-player-btn rounded-full outline-none hover:bg-white/10 ${tv ? "p-3" : "p-2"}`}
+                    aria-label="+10s"
+                  >
+                    <IconSkipForward className={tv ? "h-6 w-6" : "h-5 w-5"} />
+                  </button>
+                </>
+              ) : null}
+
+              <div className={`items-center gap-2 ${tv ? "flex" : "hidden sm:flex"}`}>
+                <button
+                  type="button"
+                  {...(tv ? { "data-tv-focus": true } : {})}
+                  onClick={toggleMute}
+                  className={`tv-focus tv-player-btn rounded-full outline-none hover:bg-white/10 ${tv ? "p-3" : "p-2"}`}
+                >
+                  {muted || volume === 0 ? <IconMute className={tv ? "h-6 w-6" : "h-5 w-5"} /> : <IconVolume className={tv ? "h-6 w-6" : "h-5 w-5"} />}
+                </button>
+                {!tv ? (
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={muted ? 0 : volume}
+                    onChange={(event) => setVol(Number(event.target.value))}
+                    className="h-1 w-24 cursor-pointer accent-[#e50914]"
+                  />
+                ) : null}
+              </div>
+
+              {!live ? (
+                <p className="ml-1 text-xs tabular-nums text-zinc-300 sm:text-sm">
+                  {formatTime(current)} <span className="text-zinc-500">/</span> {formatTime(duration)}
+                </p>
+              ) : (
+                <p className={`ml-1 font-medium text-zinc-300 ${tv ? "text-base" : "text-sm"}`}>{title}</p>
+              )}
 
               <div className="ml-auto flex items-center gap-1">
                 {nextEpisode ? (
                   <Link
                     href={nextEpisode}
-                    className="hidden rounded-md bg-white/10 px-3 py-2 text-xs font-semibold hover:bg-white/15 sm:inline"
+                    {...(tv ? { "data-tv-focus": true } : {})}
+                    className={`tv-focus hidden rounded-md bg-white/10 px-3 py-2 text-xs font-semibold outline-none hover:bg-white/15 sm:inline ${
+                      tv ? "!inline px-5 py-3 text-sm" : ""
+                    }`}
                   >
                     Épisode suivant
                   </Link>
@@ -724,23 +889,25 @@ export function Player({
                 <div className="relative">
                   <button
                     type="button"
+                    {...(tv ? { "data-tv-focus": true } : {})}
                     onClick={() => {
                       setMenu((value) => (value ? null : "root"));
                       showControls(true);
                     }}
-                    className="rounded-full p-2 hover:bg-white/10"
+                    className={`tv-focus tv-player-btn rounded-full outline-none hover:bg-white/10 ${tv ? "p-3" : "p-2"}`}
                     aria-label="Réglages"
                   >
-                    <IconSettings className="h-5 w-5" />
+                    <IconSettings className={tv ? "h-6 w-6" : "h-5 w-5"} />
                   </button>
                   {menu ? (
-                    <div className="absolute bottom-12 right-0 w-56 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur">
+                    <div data-tv-zone="player" className="absolute bottom-12 right-0 w-56 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur">
                       {menu === "root" ? (
                         <>
                           <button
                             type="button"
+                            {...(tv ? { "data-tv-focus": true, "data-tv-autofocus": true } : {})}
                             onClick={() => setMenu("speed")}
-                            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
+                            className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
                           >
                             <span>Vitesse</span>
                             <span className="text-zinc-400">{speed}×</span>
@@ -748,8 +915,9 @@ export function Player({
                           {qualities.length > 1 ? (
                             <button
                               type="button"
+                              {...(tv ? { "data-tv-focus": true } : {})}
                               onClick={() => setMenu("quality")}
-                              className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
+                              className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
                             >
                               <span>Qualité</span>
                               <span className="text-zinc-400">
@@ -759,11 +927,12 @@ export function Player({
                               </span>
                             </button>
                           ) : null}
-                          {servers.length > 1 ? (
+                          {!live && servers.length > 1 ? (
                             <button
                               type="button"
+                              {...(tv ? { "data-tv-focus": true } : {})}
                               onClick={() => setMenu("server")}
-                              className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-white/5"
+                              className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
                             >
                               <span>Version</span>
                               <span className="max-w-[7rem] truncate text-zinc-400">

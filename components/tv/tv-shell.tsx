@@ -8,6 +8,7 @@ import {
   IconFilm,
   IconHome,
   IconList,
+  IconLive,
   IconLogout,
   IconSearch,
   IconSwitch,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/browse", label: "Accueil", Icon: IconHome },
   { href: "/films", label: "Films", Icon: IconFilm },
   { href: "/series", label: "Séries", Icon: IconTv },
+  { href: "/tv", label: "TV live", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
 ] as const;
 
@@ -60,6 +62,7 @@ export function TvShell({ children }: { children: ReactNode }) {
       <TvSpatialNav enabled />
 
       <aside
+        data-tv-zone="rail"
         className={`tv-rail sticky top-0 z-40 flex h-screen shrink-0 flex-col border-r border-white/5 bg-[#050505] transition-[width] duration-200 ${
           expanded ? "w-52" : "w-[4.75rem]"
         }`}
@@ -136,7 +139,9 @@ export function TvShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="tv-pane relative min-w-0 flex-1 overflow-x-hidden">{children}</div>
+      <div data-tv-zone="content" className="tv-pane relative min-w-0 flex-1 overflow-x-hidden">
+        {children}
+      </div>
     </div>
   );
 }

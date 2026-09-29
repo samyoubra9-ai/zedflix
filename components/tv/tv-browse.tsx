@@ -199,6 +199,34 @@ export function TvBrowse() {
 
       <div className={`relative z-10 ${featured ? "-mt-6" : "pt-10"}`}>
         {!loading ? (
+          <div className="mb-8 px-10">
+            <Link
+              href="/tv"
+              data-tv-focus
+              className="tv-focus group relative flex min-h-[7.5rem] w-full items-stretch overflow-hidden rounded-2xl outline-none ring-1 ring-white/10"
+            >
+              <span className="absolute inset-0 bg-[linear-gradient(110deg,#e50914_0%,#7f0b12_42%,#141414_100%)]" />
+              <span className="absolute inset-0 bg-[radial-gradient(circle_at_right,rgba(255,255,255,0.16),transparent_45%)]" />
+              <span className="relative flex flex-1 items-center justify-between gap-4 px-7 py-5">
+                <span>
+                  <span className="inline-flex items-center gap-2 text-[11px] font-semibold tracking-[0.28em] text-white/90">
+                    <span className="tv-live-dot h-2 w-2 rounded-full bg-white" />
+                    EN DIRECT
+                  </span>
+                  <span className="mt-2 block text-2xl font-bold">TV live</span>
+                  <span className="mt-1 block text-sm text-white/75">
+                    Chaînes françaises · télécommande OK
+                  </span>
+                </span>
+                <span className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black">
+                  Ouvrir
+                </span>
+              </span>
+            </Link>
+          </div>
+        ) : null}
+
+        {!loading ? (
           <div className="px-10">
             <ContinueWatching />
           </div>

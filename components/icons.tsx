@@ -24,6 +24,16 @@ export function IconTv({ className = "h-5 w-5" }: { className?: string }) {
   );
 }
 
+export function IconLive({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+      <path d="M7.5 7.5a6.5 6.5 0 0 0 0 9M16.5 7.5a6.5 6.5 0 0 1 0 9" strokeLinecap="round" />
+      <path d="M4.5 4.5a10.5 10.5 0 0 0 0 15M19.5 4.5a10.5 10.5 0 0 1 0 15" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconAndroid({ className = "h-5 w-5" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
