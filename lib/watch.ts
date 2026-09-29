@@ -779,7 +779,7 @@ async function playFromServers(
     try {
       const stream = await openEmbed(server.src, origin);
       if (!stream) {
-        errors.push(`${server.label}: illisible`);
+        errors.push(`source-${server.id}`);
         continue;
       }
       const language = await classifyStreamLanguage(stream);
@@ -813,8 +813,8 @@ async function playFromServers(
         return result;
       }
       english.push(result);
-    } catch (error) {
-      errors.push(`${server.label}: ${error instanceof Error ? error.message : "échec"}`);
+    } catch {
+      errors.push(`source-${server.id}`);
     }
   }
 
@@ -825,7 +825,7 @@ async function playFromServers(
 
   throw new Error(
     errors.length
-      ? `Aucun serveur lisible (${errors.slice(0, 3).join(" · ")})`
+      ? "Lecture indisponible. Réessaie dans un instant."
       : "Version française (VF) indisponible pour ce titre",
   );
 }

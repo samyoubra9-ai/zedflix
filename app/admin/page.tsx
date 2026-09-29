@@ -472,7 +472,9 @@ export default function AdminPage() {
           {view === "create" ? (
             <form onSubmit={createUser} className="max-w-xl rounded-2xl border border-white/10 bg-zinc-950 p-5">
               <h2 className="text-lg font-medium">Créer un accès</h2>
-              <p className="mt-1 text-sm text-zinc-400">Le compte est confirmé tout de suite et lié à une durée.</p>
+              <p className="mt-1 text-sm text-zinc-400">
+                Compte à vie · un profil Principal est créé avec la durée choisie (5 profils max, 2 appareils / profil).
+              </p>
               <label className="mt-5 block text-sm text-zinc-400">
                 Email
                 <input
@@ -495,7 +497,7 @@ export default function AdminPage() {
                 />
               </label>
               <label className="mt-4 block text-sm text-zinc-400">
-                Durée
+                Durée du profil Principal
                 <select
                   value={months}
                   onChange={(event) => setMonths(Number(event.target.value))}
@@ -535,7 +537,7 @@ export default function AdminPage() {
               <>
                 <h2 className="text-lg font-semibold">Prolonger {dialog.user.email}</h2>
                 <p className="mt-2 text-sm text-zinc-400">
-                  Le temps restant est conservé. Si le compte est déjà expiré, la nouvelle durée part d’aujourd’hui.
+                  Prolonge tous les profils. Le temps restant est conservé ; si un profil est expiré, la durée repart d’aujourd’hui.
                 </p>
                 <select
                   value={extendMonths}
@@ -589,12 +591,34 @@ export default function AdminPage() {
   );
 }
 
-type ManagedProfile = { id: string; name: string; color: number; locked: boolean };
+type ManagedProfile = {
+  id: string;
+  name: string;
+  color: number;
+  locked: boolean;
+  expiresAt: string | null;
+  expired: boolean;
+  trialPending: boolean;
+  daysLeft: number | null;
+  warningMessage: string | null;
+};
+
+function profileStatusLabel(profile: ManagedProfile) {
+  if (profile.trialPending) return "Essai 3 j. en attente";
+  if (profile.expired) return "Expiré";
+  if (profile.daysLeft !== null && profile.daysLeft <= 3) {
+    return profile.daysLeft <= 1 ? "Expire bientôt" : `${profile.daysLeft} j. restants`;
+  }
+  return profile.expiresAt ? `Jusqu’au ${formatDate(profile.expiresAt)}` : "Actif";
+}
 
 function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => void }) {
   const [profiles, setProfiles] = useState<ManagedProfile[]>([]);
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
+  const [createMode, setCreateMode] = useState<"trial" | "paid">("paid");
+  const [createMonths, setCreateMonths] = useState(1);
+  const [extendMonths, setExtendMonths] = useState(1);
   const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string }>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -634,19 +658,30 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
         <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          Cinq profils maximum. Chaque nouveau profil a un code à 4 chiffres. Le téléphone ne peut pas les modifier.
+          5 profils max · 2 appareils / profil · essai 3 jours (1 fois / appareil) · compte à vie.
         </p>
         <div className="mt-5 space-y-3">
           {profiles.map((profile) => {
             const draft = drafts[profile.id] || { name: profile.name, pin: "" };
             return (
               <div key={profile.id} className="rounded-xl border border-white/10 p-3">
-                <div className="mb-3 flex items-center gap-2 text-xs text-zinc-400">
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                   <span
                     className="h-3 w-3 rounded-full"
                     style={{ backgroundColor: cssColor(profile.color) }}
                   />
-                  {profile.locked ? "Code défini" : "Sans code"}
+                  <span>{profile.locked ? "Code défini" : "Sans code"}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 ${
+                      profile.expired
+                        ? "bg-red-950 text-red-300"
+                        : profile.trialPending
+                          ? "bg-amber-950 text-amber-200"
+                          : "bg-green-950 text-green-300"
+                    }`}
+                  >
+                    {profileStatusLabel(profile)}
+                  </span>
                 </div>
                 <input
                   value={draft.name}
@@ -669,7 +704,36 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   }
                   className={`${fieldClass()} mt-2`}
                 />
-                <div className="mt-3 flex justify-end gap-2">
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <select
+                    value={extendMonths}
+                    onChange={(event) => setExtendMonths(Number(event.target.value))}
+                    className="rounded-lg border border-white/10 bg-black px-2 py-2 text-xs text-white"
+                  >
+                    {DURATIONS.map((duration) => (
+                      <option key={duration.months} value={duration.months}>
+                        +{duration.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ extend: true, months: extendMonths }),
+                        });
+                        const body = await response.json();
+                        if (!response.ok) throw new Error(body.error || "Prolongation impossible");
+                      })
+                    }
+                    className="rounded-lg border border-white/15 px-3 py-2 text-sm disabled:opacity-50"
+                  >
+                    Prolonger
+                  </button>
                   <button
                     type="button"
                     disabled={busy}
@@ -719,7 +783,12 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                 const response = await fetch(`/admin/users/${user.id}/profiles`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ name, pin }),
+                  body: JSON.stringify({
+                    name,
+                    pin,
+                    trial: createMode === "trial",
+                    months: createMode === "paid" ? createMonths : null,
+                  }),
                 });
                 const body = await response.json();
                 if (!response.ok) throw new Error(body.error || "Création impossible");
@@ -747,6 +816,43 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
               onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
               className={`${fieldClass()} mt-2`}
             />
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setCreateMode("paid")}
+                className={`rounded-lg px-3 py-2 text-xs ${
+                  createMode === "paid" ? "bg-red-600 text-white" : "border border-white/15 text-zinc-300"
+                }`}
+              >
+                Abonnement
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreateMode("trial")}
+                className={`rounded-lg px-3 py-2 text-xs ${
+                  createMode === "trial" ? "bg-red-600 text-white" : "border border-white/15 text-zinc-300"
+                }`}
+              >
+                Essai 3 jours
+              </button>
+            </div>
+            {createMode === "paid" ? (
+              <select
+                value={createMonths}
+                onChange={(event) => setCreateMonths(Number(event.target.value))}
+                className={`${fieldClass()} mt-2`}
+              >
+                {DURATIONS.map((duration) => (
+                  <option key={duration.months} value={duration.months}>
+                    {duration.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="mt-2 text-xs text-zinc-500">
+                L’essai démarre au premier appareil. Un appareil déjà essayé ne peut pas relancer un essai.
+              </p>
+            )}
             <button
               type="submit"
               disabled={busy || pin.length !== 4}

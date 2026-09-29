@@ -22,6 +22,11 @@ type Profile = {
   name: string;
   color: number;
   locked: boolean;
+  expired?: boolean;
+  trialPending?: boolean;
+  daysLeft?: number | null;
+  warning?: "soon" | "urgent" | "expired" | null;
+  warningMessage?: string | null;
 };
 
 function colorCss(color: number) {
@@ -87,6 +92,10 @@ export default function ProfilesPage() {
   }, [router]);
 
   async function choose(profile: Profile, code = "", preferTrust = false) {
+    if (profile.expired) {
+      setStatus(profile.warningMessage || "Ce profil a expiré");
+      return;
+    }
     if (profile.locked && code.length !== 4 && !preferTrust) {
       setUnlock(profile);
       setPin("");
@@ -173,15 +182,21 @@ export default function ProfilesPage() {
       <h1 className="mt-8 text-center text-2xl font-semibold sm:mt-10 sm:text-5xl">Qui regarde ?</h1>
       <p className="mt-3 max-w-full truncate px-4 text-sm text-zinc-400">{email}</p>
 
+      {initials.some((profile) => profile.warningMessage && !profile.expired) ? (
+        <p className="mt-4 max-w-lg rounded-xl border border-amber-500/25 bg-amber-950/40 px-4 py-3 text-center text-sm text-amber-100">
+          {initials.find((profile) => profile.warningMessage && !profile.expired)?.warningMessage}
+        </p>
+      ) : null}
+
       {initials.length ? (
         <ul className="mt-10 flex max-w-4xl flex-wrap justify-center gap-5 sm:mt-12 sm:gap-8">
           {initials.map((profile) => (
             <li key={profile.id}>
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || Boolean(profile.expired)}
                 onClick={() => choose(profile)}
-                className="group w-24 text-center sm:w-36"
+                className="group w-24 text-center sm:w-36 disabled:opacity-45"
               >
                 <span
                   className="relative mx-auto flex aspect-square w-full items-center justify-center rounded-md text-3xl font-bold text-white shadow-lg ring-2 ring-transparent transition group-hover:ring-white sm:text-5xl"
@@ -193,10 +208,24 @@ export default function ProfilesPage() {
                       PIN
                     </span>
                   ) : null}
+                  {profile.expired ? (
+                    <span className="absolute inset-x-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-red-200">
+                      Expiré
+                    </span>
+                  ) : profile.trialPending ? (
+                    <span className="absolute inset-x-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-amber-100">
+                      Essai
+                    </span>
+                  ) : null}
                 </span>
                 <span className="mt-3 block truncate text-sm text-zinc-300 group-hover:text-white">
                   {profile.name}
                 </span>
+                {profile.daysLeft !== null && profile.daysLeft !== undefined && !profile.expired && !profile.trialPending ? (
+                  <span className="mt-1 block text-[11px] text-zinc-500">
+                    {profile.daysLeft <= 3 ? `${profile.daysLeft} j. restants` : null}
+                  </span>
+                ) : null}
               </button>
             </li>
           ))}

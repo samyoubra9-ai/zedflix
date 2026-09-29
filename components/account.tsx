@@ -20,7 +20,14 @@ import { PlayerSkeleton, ShellSkeleton } from "./loading";
 import { useTvMode } from "@/hooks/use-tv-mode";
 import { TvShell } from "@/components/tv/tv-shell";
 
-type ProfileInfo = { id: string; name: string; color: number; locked: boolean };
+type ProfileInfo = {
+  id: string;
+  name: string;
+  color: number;
+  locked: boolean;
+  warningMessage?: string | null;
+  daysLeft?: number | null;
+};
 type SessionState = { email: string; profile: ProfileInfo | null };
 
 /** null = not checked yet; false = logged out; object = logged in */
@@ -105,6 +112,7 @@ export function AccountGate({
   const pathname = usePathname();
   const tv = useTvMode();
   const [elsewhere, setElsewhere] = useState(false);
+  const [expiryNotice, setExpiryNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ready) return;
@@ -128,9 +136,19 @@ export function AccountGate({
         router.replace(`/login?next=${encodeURIComponent(pathname)}&expired=1`);
         return;
       }
-      const data = (await response.json()) as { profile?: boolean };
+      const data = (await response.json()) as {
+        profile?: boolean;
+        expired?: boolean;
+        warningMessage?: string | null;
+      };
+      if (response.ok && data.expired) {
+        forgetWebProfile();
+        router.replace("/profiles?expired=1");
+        return;
+      }
       if (response.ok && data.profile === false) setElsewhere(true);
       else setElsewhere(false);
+      setExpiryNotice(data.warningMessage || null);
     }
     check();
     const timer = window.setInterval(check, 25_000);
@@ -174,6 +192,12 @@ export function AccountGate({
             >
               Changer de profil
             </button>
+          </div>
+        </div>
+      ) : expiryNotice ? (
+        <div className="fixed inset-x-0 top-14 z-50 px-4 sm:top-16 sm:px-8 md:px-12">
+          <div className="rounded-xl border border-amber-500/30 bg-amber-950/90 px-4 py-3 text-sm text-amber-50 shadow-xl backdrop-blur">
+            {expiryNotice}
           </div>
         </div>
       ) : null}

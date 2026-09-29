@@ -50,6 +50,10 @@ export function supabaseConfigured() {
 }
 
 const DURATIONS = [1, 3, 6, 12] as const;
+const MAX_PROFILES = 5;
+const PROFILE_SEATS = 2;
+const TRIAL_MS = 3 * 24 * 60 * 60 * 1000;
+const DAY_MS = 86_400_000;
 
 export function expirationDate(months: number) {
   const date = new Date();
@@ -62,13 +66,6 @@ function expiresAtOf(metadata: Record<string, unknown> | undefined) {
   return typeof value === "string" ? value : null;
 }
 
-function assertActive(metadata: Record<string, unknown> | undefined) {
-  const expiresAt = expiresAtOf(metadata);
-  if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-    throw new AccountError("Compte expiré", 403);
-  }
-}
-
 function deviceIdOf(metadata: Record<string, unknown> | undefined) {
   const value = metadata?.device_id;
   return typeof value === "string" ? value : null;
@@ -79,8 +76,6 @@ function keptMetadata(metadata: Record<string, unknown> | undefined, patch: Reco
   delete next.adult;
   return next;
 }
-
-const PROFILE_SEATS = 2;
 
 type ProfileSeat = { deviceId: string; at: number };
 
@@ -114,6 +109,189 @@ function holdsSeat(metadata: Record<string, unknown> | undefined, profileId: str
   return (seatsOf(metadata)[profileId] || []).some((seat) => seat.deviceId === deviceId);
 }
 
+function trialsOf(metadata: Record<string, unknown> | undefined): Record<string, number> {
+  const value = metadata?.device_trials;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const trials: Record<string, number> = {};
+  for (const [deviceId, raw] of Object.entries(value as Record<string, unknown>)) {
+    const at = Number(raw);
+    if (!deviceId || deviceId.length > 80 || !Number.isFinite(at)) continue;
+    trials[deviceId] = at;
+  }
+  return trials;
+}
+
+const PROFILE_COLORS = [-1767148, -4711132, -14725511, -13669553, -10732178];
+
+function validPin(pin: string) {
+  return pin === "" || /^\d{4}$/.test(pin);
+}
+
+export type StoredProfile = {
+  id: string;
+  name: string;
+  pin: string;
+  color: number;
+  expiresAt: string | null;
+  trialUsed: boolean;
+};
+
+export type PublicProfile = {
+  id: string;
+  name: string;
+  color: number;
+  locked: boolean;
+  expiresAt: string | null;
+  expired: boolean;
+  trialPending: boolean;
+  daysLeft: number | null;
+  warning: "soon" | "urgent" | "expired" | null;
+  warningMessage: string | null;
+};
+
+function daysLeftOf(expiresAt: string | null) {
+  if (!expiresAt) return null;
+  return Math.ceil((Date.parse(expiresAt) - Date.now()) / DAY_MS);
+}
+
+function isExpired(profile: StoredProfile) {
+  if (!profile.expiresAt) return profile.trialUsed;
+  return Date.parse(profile.expiresAt) <= Date.now();
+}
+
+function profileWarning(profile: StoredProfile): Pick<
+  PublicProfile,
+  "expired" | "trialPending" | "daysLeft" | "warning" | "warningMessage"
+> {
+  const trialPending = !profile.expiresAt && !profile.trialUsed;
+  if (trialPending) {
+    return {
+      expired: false,
+      trialPending: true,
+      daysLeft: 3,
+      warning: null,
+      warningMessage: "Essai de 3 jours au premier appareil",
+    };
+  }
+  const expired = isExpired(profile);
+  const daysLeft = daysLeftOf(profile.expiresAt);
+  if (expired) {
+    return {
+      expired: true,
+      trialPending: false,
+      daysLeft: daysLeft ?? 0,
+      warning: "expired",
+      warningMessage: "Ce profil a expiré. Contacte l’admin pour le prolonger.",
+    };
+  }
+  if (daysLeft !== null && daysLeft <= 1) {
+    return {
+      expired: false,
+      trialPending: false,
+      daysLeft,
+      warning: "urgent",
+      warningMessage:
+        daysLeft <= 0
+          ? "Ce profil expire aujourd’hui."
+          : "Ce profil expire demain.",
+    };
+  }
+  if (daysLeft !== null && daysLeft <= 3) {
+    return {
+      expired: false,
+      trialPending: false,
+      daysLeft,
+      warning: "soon",
+      warningMessage: `Ce profil expire dans ${daysLeft} jour${daysLeft > 1 ? "s" : ""}.`,
+    };
+  }
+  return {
+    expired: false,
+    trialPending: false,
+    daysLeft,
+    warning: null,
+    warningMessage: null,
+  };
+}
+
+function publicProfile(profile: StoredProfile): PublicProfile {
+  return {
+    id: profile.id,
+    name: profile.name,
+    color: profile.color,
+    locked: profile.pin.length === 4,
+    expiresAt: profile.expiresAt,
+    ...profileWarning(profile),
+  };
+}
+
+function assertProfileUsable(profile: StoredProfile) {
+  if (isExpired(profile)) {
+    throw new AccountError("Profil expiré", 403);
+  }
+}
+
+function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfile[] {
+  const value = metadata?.profiles;
+  if (!Array.isArray(value)) return [];
+  const accountExp = expiresAtOf(metadata);
+  return value
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const profile = item as Record<string, unknown>;
+      const id = String(profile.id || "");
+      const name = String(profile.name || "").trim();
+      const pin = String(profile.pin || "");
+      const color = Number(profile.color);
+      if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !validPin(pin)) return [];
+      const rawExpires = profile.expiresAt;
+      let expiresAt = typeof rawExpires === "string" ? rawExpires : null;
+      let trialUsed = Boolean(profile.trialUsed);
+      if (!expiresAt && accountExp) {
+        expiresAt = accountExp;
+        trialUsed = true;
+      }
+      return [
+        {
+          id,
+          name: name.slice(0, 18),
+          pin,
+          color: Number.isFinite(color) ? color : PROFILE_COLORS[0],
+          expiresAt,
+          trialUsed,
+        },
+      ];
+    })
+    .slice(0, MAX_PROFILES);
+}
+
+function accountSummary(profiles: StoredProfile[]) {
+  if (!profiles.length) {
+    return { expiresAt: null as string | null, expired: false, activeProfiles: 0 };
+  }
+  const active = profiles.filter((profile) => !isExpired(profile) || (!profile.expiresAt && !profile.trialUsed));
+  const dated = profiles
+    .map((profile) => profile.expiresAt)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return {
+    expiresAt: dated[0] || null,
+    expired: active.length === 0,
+    activeProfiles: active.length,
+  };
+}
+
+function extendExpiresAt(current: string | null, months: number) {
+  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
+  base.setMonth(base.getMonth() + months);
+  return base.toISOString();
+}
+
+function clearProfileSeats(seats: Record<string, ProfileSeat[]>, profileId: string) {
+  delete seats[profileId];
+  return seats;
+}
+
 export async function createAccount(emailRaw: string, password: string, months = 1) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -126,12 +304,27 @@ export async function createAccount(emailRaw: string, password: string, months =
     throw new AccountError("Durée invalide", 400);
   }
 
+  const main: StoredProfile = {
+    id: "main",
+    name: "Principal",
+    pin: "",
+    color: PROFILE_COLORS[0],
+    expiresAt: expirationDate(months),
+    trialUsed: true,
+  };
+
   const supabase = client();
   const { error } = await supabase.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    app_metadata: { expires_at: expirationDate(months) },
+    app_metadata: {
+      account: "lifetime",
+      profiles: [main],
+      profile_seats: {},
+      device_trials: {},
+      expires_at: null,
+    },
   });
   if (error) {
     const message = error.message.toLowerCase();
@@ -140,7 +333,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email, months };
+  return { email, months, lifetime: true };
 }
 
 export async function listAccounts() {
@@ -156,15 +349,18 @@ export async function listAccounts() {
   return users
     .filter((user) => user.email)
     .map((user) => {
-      const expiresAt = expiresAtOf(user.app_metadata);
-      const expired = Boolean(expiresAt && Date.parse(expiresAt) <= Date.now());
+      const profiles = profilesOf(user.app_metadata);
+      const summary = accountSummary(profiles);
       return {
         id: user.id,
         email: user.email as string,
         createdAt: user.created_at,
         lastSignInAt: user.last_sign_in_at,
-        expiresAt,
-        expired,
+        expiresAt: summary.expiresAt,
+        expired: summary.expired,
+        activeProfiles: summary.activeProfiles,
+        profileCount: profiles.length,
+        lifetime: true,
         deviceBound: Boolean(deviceIdOf(user.app_metadata)) || seatCount(user.app_metadata) > 0,
       };
     })
@@ -191,15 +387,42 @@ export async function extendAccount(id: string, months: number) {
   const supabase = client();
   const { data, error } = await supabase.auth.admin.getUserById(id);
   if (error || !data.user) throw new AccountError("Compte introuvable", 404);
-  const current = expiresAtOf(data.user.app_metadata);
-  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
-  base.setMonth(base.getMonth() + months);
-  const expiresAt = base.toISOString();
-  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
-    app_metadata: keptMetadata(data.user.app_metadata, { expires_at: expiresAt }),
-  });
-  if (updateError) throw new AccountError(updateError.message, 400);
-  return { email: data.user.email, expiresAt, months };
+  const current = profilesOf(data.user.app_metadata);
+  if (!current.length) {
+    throw new AccountError("Aucun profil à prolonger — crée un profil d’abord", 400);
+  }
+  const profiles = current.map((profile) => ({
+    ...profile,
+    expiresAt: extendExpiresAt(profile.expiresAt, months),
+    trialUsed: true,
+  }));
+  await saveProfiles(data.user.id, data.user.app_metadata, profiles, { expires_at: null });
+  const summary = accountSummary(profiles);
+  return { email: data.user.email, expiresAt: summary.expiresAt, months, profiles: profiles.map(publicProfile) };
+}
+
+export async function adminExtendProfile(userId: string, profileId: string, months: number) {
+  assertUserId(userId);
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
+  const user = await accountUser(userId);
+  const current = profilesOf(user.app_metadata);
+  const existing = current.find((profile) => profile.id === profileId);
+  if (!existing) throw new AccountError("Profil introuvable", 404);
+  const profile: StoredProfile = {
+    ...existing,
+    expiresAt: extendExpiresAt(existing.expiresAt, months),
+    trialUsed: true,
+  };
+  await saveProfiles(
+    user.id,
+    user.app_metadata,
+    current.map((item) => (item.id === profileId ? profile : item)),
+    { expires_at: null },
+  );
+  return publicProfile(profile);
 }
 
 export async function releaseDevice(id: string) {
@@ -229,7 +452,6 @@ export async function loginWeb(emailRaw: string, password: string) {
   if (error || !data.session) {
     throw new AccountError("Email ou mot de passe incorrect", 401);
   }
-  assertActive(data.session.user.app_metadata);
   return tokens(data.session);
 }
 
@@ -237,7 +459,6 @@ export async function refreshWeb(refreshToken: string) {
   if (!refreshToken) throw new AccountError("Session expirée", 401);
   const { data, error } = await client().auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session) throw new AccountError("Session expirée", 401);
-  assertActive(data.session.user.app_metadata);
   return tokens(data.session);
 }
 
@@ -245,7 +466,6 @@ export async function accountFromAccessToken(token: string): Promise<Account> {
   if (!token) throw new AccountError("Connexion requise", 401);
   const { data, error } = await client().auth.getUser(token);
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
   return { id: data.user.id, email: data.user.email };
 }
 
@@ -257,7 +477,6 @@ export async function login(emailRaw: string, password: string, deviceId: string
   if (error || !data.session) {
     throw new AccountError("Email ou mot de passe incorrect", 401);
   }
-  assertActive(data.session.user.app_metadata);
   return tokens(data.session);
 }
 
@@ -266,7 +485,6 @@ export async function refresh(refreshToken: string, deviceId: string) {
   if (!refreshToken) throw new AccountError("Session expirée", 401);
   const { data, error } = await client().auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session) throw new AccountError("Session expirée", 401);
-  assertActive(data.session.user.app_metadata);
   return tokens(data.session);
 }
 
@@ -274,11 +492,42 @@ export async function presence(accessToken: string, deviceId: string, profileId 
   if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user?.email) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
   const watching = /^[a-zA-Z0-9]{4,40}$/.test(profileId);
+  if (!watching) {
+    return { ok: true, profile: true, expired: false, warning: null, warningMessage: null, daysLeft: null };
+  }
+
+  const profiles = profilesOf(data.user.app_metadata);
+  const profile = profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    return { ok: true, profile: false, expired: false, warning: null, warningMessage: null, daysLeft: null };
+  }
+
+  const status = profileWarning(profile);
+  if (status.expired) {
+    const seats = seatsOf(data.user.app_metadata);
+    if (holdsSeat(data.user.app_metadata, profileId, deviceId)) {
+      clearProfileSeats(seats, profileId);
+      await saveSeats(data.user.id, data.user.app_metadata, seats);
+    }
+    return {
+      ok: true,
+      profile: false,
+      expired: true,
+      warning: status.warning,
+      warningMessage: status.warningMessage,
+      daysLeft: status.daysLeft,
+    };
+  }
+
+  const held = holdsSeat(data.user.app_metadata, profileId, deviceId);
   return {
     ok: true,
-    profile: !watching || holdsSeat(data.user.app_metadata, profileId, deviceId),
+    profile: held,
+    expired: false,
+    warning: held ? status.warning : null,
+    warningMessage: held ? status.warningMessage : null,
+    daysLeft: held ? status.daysLeft : null,
   };
 }
 
@@ -288,39 +537,10 @@ export async function accountFromRequest(request: Request): Promise<Account> {
   return accountFromAccessToken(token);
 }
 
-const PROFILE_COLORS = [-1767148, -4711132, -14725511, -13669553, -10732178];
-
-function validPin(pin: string) {
-  return pin === "" || /^\d{4}$/.test(pin);
-}
-
-export type StoredProfile = {
-  id: string;
-  name: string;
-  pin: string;
-  color: number;
-};
-
-function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfile[] {
-  const value = metadata?.profiles;
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const profile = item as Record<string, unknown>;
-    const id = String(profile.id || "");
-    const name = String(profile.name || "").trim();
-    const pin = String(profile.pin || "");
-    const color = Number(profile.color);
-    if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name || !validPin(pin)) return [];
-    return [{ id, name: name.slice(0, 18), pin, color: Number.isFinite(color) ? color : PROFILE_COLORS[0] }];
-  }).slice(0, 5);
-}
-
 export async function userFromToken(accessToken: string, deviceId: string) {
   if (!deviceId.trim()) throw new AccountError("Appareil inconnu", 400);
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
   return data.user;
 }
 
@@ -331,7 +551,7 @@ async function saveProfiles(
   extra: Record<string, unknown> = {},
 ) {
   const { error } = await client().auth.admin.updateUserById(userId, {
-    app_metadata: keptMetadata(metadata, { profiles, ...extra }),
+    app_metadata: keptMetadata(metadata, { profiles, account: "lifetime", ...extra }),
   });
   if (error) throw new AccountError(error.message, 400);
 }
@@ -343,24 +563,65 @@ async function saveSeats(userId: string, metadata: Record<string, unknown> | und
   if (error) throw new AccountError(error.message, 400);
 }
 
+async function startTrialIfNeeded(user: User, profile: StoredProfile, deviceId: string) {
+  if (profile.expiresAt || profile.trialUsed) return { profile, changed: false as const };
+
+  const trials = trialsOf(user.app_metadata);
+  if (trials[deviceId]) {
+    throw new AccountError("Essai déjà utilisé sur cet appareil", 403);
+  }
+
+  const next: StoredProfile = {
+    ...profile,
+    expiresAt: new Date(Date.now() + TRIAL_MS).toISOString(),
+    trialUsed: true,
+  };
+  trials[deviceId] = Date.now();
+  const current = profilesOf(user.app_metadata).map((item) => (item.id === profile.id ? next : item));
+  await saveProfiles(user.id, user.app_metadata, current, {
+    device_trials: trials,
+    expires_at: null,
+  });
+  return { profile: next, changed: true as const };
+}
+
 export async function claimProfile(accessToken: string, deviceId: string, profileId: string) {
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
-  const user = await userFromToken(accessToken, deviceId);
-  if (!profilesOf(user.app_metadata).some((profile) => profile.id === profileId)) {
-    throw new AccountError("Profil introuvable", 404);
+  let user = await userFromToken(accessToken, deviceId);
+  let profiles = profilesOf(user.app_metadata);
+  let profile = profiles.find((item) => item.id === profileId);
+  if (!profile) throw new AccountError("Profil introuvable", 404);
+
+  if (!profile.expiresAt && !profile.trialUsed) {
+    const started = await startTrialIfNeeded(user, profile, deviceId);
+    profile = started.profile;
+    if (started.changed) {
+      const refreshed = await client().auth.admin.getUserById(user.id);
+      if (refreshed.data.user) user = refreshed.data.user;
+      profiles = profilesOf(user.app_metadata);
+      profile = profiles.find((item) => item.id === profileId) || profile;
+    }
   }
+
+  assertProfileUsable(profile);
+
   const seats = seatsOf(user.app_metadata);
   for (const id of Object.keys(seats)) {
     seats[id] = seats[id].filter((seat) => seat.deviceId !== deviceId);
     if (!seats[id].length) delete seats[id];
   }
   const list = seats[profileId] || [];
-  list.push({ deviceId, at: Date.now() });
+  const existing = list.find((seat) => seat.deviceId === deviceId);
+  if (!existing) {
+    list.push({ deviceId, at: Date.now() });
+  } else {
+    existing.at = Date.now();
+  }
   list.sort((a, b) => a.at - b.at);
   while (list.length > PROFILE_SEATS) list.shift();
   seats[profileId] = list;
   await saveSeats(user.id, user.app_metadata, seats);
-  return { ok: true };
+  return { ok: true, profile: publicProfile(profile) };
 }
 
 export async function releaseSeats(accessToken: string, deviceId: string) {
@@ -379,7 +640,10 @@ export async function releaseSeats(accessToken: string, deviceId: string) {
 
 export async function listProfiles(accessToken: string, deviceId: string) {
   const user = await userFromToken(accessToken, deviceId);
-  return profilesOf(user.app_metadata);
+  return profilesOf(user.app_metadata).map((profile) => ({
+    ...publicProfile(profile),
+    pin: profile.pin,
+  }));
 }
 
 export async function createProfile(
@@ -410,7 +674,7 @@ export async function updateProfile(
   if (existing.pin && existing.pin !== currentPin) throw new AccountError("Code incorrect", 403);
   const profile = { ...existing, pin: newPin };
   await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
-  return profile;
+  return { ...publicProfile(profile), pin: profile.pin };
 }
 
 export type ProfilePatch = {
@@ -670,15 +934,6 @@ export async function deleteProfile(_accessToken: string, _deviceId: string, _id
   throw new AccountError("Seul l'admin peut supprimer un profil", 403);
 }
 
-function publicProfile(profile: StoredProfile) {
-  return {
-    id: profile.id,
-    name: profile.name,
-    color: profile.color,
-    locked: profile.pin.length === 4,
-  };
-}
-
 async function accountUser(id: string) {
   assertUserId(id);
   const { data, error } = await client().auth.admin.getUserById(id);
@@ -691,19 +946,37 @@ export async function adminListProfiles(userId: string) {
   return profilesOf(user.app_metadata).map(publicProfile);
 }
 
-export async function adminCreateProfile(userId: string, nameRaw: string, pin: string) {
+export async function adminCreateProfile(
+  userId: string,
+  nameRaw: string,
+  pin: string,
+  months: number | null = null,
+) {
   const name = nameRaw.trim();
   if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
   const user = await accountUser(userId);
   const current = profilesOf(user.app_metadata);
-  if (current.length >= 5) throw new AccountError("5 profils maximum", 400);
+  if (current.length >= MAX_PROFILES) throw new AccountError("5 profils maximum", 400);
+
+  let expiresAt: string | null = null;
+  let trialUsed = false;
+  if (months !== null && months !== undefined) {
+    if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+      throw new AccountError("Durée invalide", 400);
+    }
+    expiresAt = expirationDate(months);
+    trialUsed = true;
+  }
+
   const profile: StoredProfile = {
     id: current.length === 0 ? "main" : crypto.randomUUID().replace(/-/g, ""),
     name: name.slice(0, 18),
     pin,
     color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
+    expiresAt,
+    trialUsed,
   };
-  await saveProfiles(user.id, user.app_metadata, [...current, profile]);
+  await saveProfiles(user.id, user.app_metadata, [...current, profile], { expires_at: null });
   return publicProfile(profile);
 }
 
@@ -736,7 +1009,6 @@ export async function adminDeleteProfile(userId: string, id: string) {
 export async function listPublicProfiles(accessToken: string) {
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
   return profilesOf(data.user.app_metadata).map(publicProfile);
 }
 
@@ -744,11 +1016,13 @@ export async function verifyProfilePin(accessToken: string, profileId: string, p
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
   const { data, error } = await client().auth.getUser(accessToken);
   if (error || !data.user) throw new AccountError("Session expirée", 401);
-  assertActive(data.user.app_metadata);
   const profile = profilesOf(data.user.app_metadata).find((item) => item.id === profileId);
   if (!profile) throw new AccountError("Profil introuvable", 404);
   if (profile.pin.length === 4 && profile.pin !== pin) {
     throw new AccountError("Code incorrect", 403);
+  }
+  if (isExpired(profile)) {
+    throw new AccountError("Profil expiré", 403);
   }
   return publicProfile(profile);
 }
