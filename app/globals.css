@@ -191,6 +191,63 @@ html.tv-mode .tv-player-btn.tv-focus:focus-visible {
   }
 }
 
+/* —— Vitrine landing —— */
+@keyframes vitrine-rise {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vitrine-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translate(-50%, 0) scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: translate(-50%, 0) scale(1.08);
+  }
+}
+
+.vitrine-rise {
+  animation: vitrine-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.vitrine-rise-delay {
+  animation: vitrine-rise 1s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+
+.vitrine-rise-delay-2 {
+  animation: vitrine-rise 1s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
+}
+
+.vitrine-glow {
+  animation: vitrine-pulse 7s ease-in-out infinite;
+}
+
+@keyframes vitrine-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.vitrine-marquee {
+  animation: vitrine-marquee 55s linear infinite;
+}
+
+.vitrine-marquee-reverse {
+  animation: vitrine-marquee 65s linear infinite reverse;
+}
+
 /* Hide mobile sticky bottom chrome leftovers if any leak through */
 html.tv-mode [data-mobile-only] {
   display: none !important;

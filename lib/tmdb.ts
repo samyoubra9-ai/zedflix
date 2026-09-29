@@ -256,6 +256,38 @@ export async function getHomeCatalog(): Promise<{
   return { featured, rows };
 }
 
+/** Public landing visuals — backdrops + posters, no account required. */
+export async function getVitrineMedia(): Promise<{
+  backdrops: { title: string; backdrop: string }[];
+  posters: { title: string; poster: string }[];
+}> {
+  const [trending, popularMovies, popularTv] = await Promise.all([
+    list("/trending/all/week"),
+    list("/movie/popular", "movie"),
+    list("/tv/popular", "tv"),
+  ]);
+
+  const pool = [...trending, ...popularMovies, ...popularTv];
+  const seenBackdrop = new Set<string>();
+  const seenPoster = new Set<string>();
+
+  const backdrops: { title: string; backdrop: string }[] = [];
+  const posters: { title: string; poster: string }[] = [];
+
+  for (const item of pool) {
+    if (item.backdrop && !seenBackdrop.has(item.backdrop) && backdrops.length < 10) {
+      seenBackdrop.add(item.backdrop);
+      backdrops.push({ title: item.title, backdrop: item.backdrop });
+    }
+    if (item.poster && !seenPoster.has(item.poster) && posters.length < 24) {
+      seenPoster.add(item.poster);
+      posters.push({ title: item.title, poster: item.poster });
+    }
+  }
+
+  return { backdrops, posters };
+}
+
 export function formatRuntime(minutes: number | null) {
   if (!minutes) return null;
   const h = Math.floor(minutes / 60);

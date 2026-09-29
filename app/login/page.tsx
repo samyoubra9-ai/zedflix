@@ -4,6 +4,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { rememberWebSession } from "@/components/account";
 import { IconAndroid, IconTv } from "@/components/icons";
+import { TELEGRAM_ESSAI_URL } from "@/lib/telegram-public";
 
 export default function LoginPage() {
   return (
@@ -89,6 +90,17 @@ function LoginForm() {
             Entrer
           </button>
           {status ? <p className="mt-4 text-sm text-zinc-300">{status}</p> : null}
+          <p className="mt-5 text-center text-sm text-zinc-500">
+            Pas de compte ?{" "}
+            <a
+              href={TELEGRAM_ESSAI_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-white underline decoration-white/30 underline-offset-4 hover:decoration-white"
+            >
+              Demander un essai 3&nbsp;jours
+            </a>
+          </p>
         </form>
       </div>
 

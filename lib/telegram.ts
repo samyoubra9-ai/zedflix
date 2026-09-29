@@ -29,6 +29,15 @@ async function send(chatId: string | number, text: string) {
   }
 }
 
+/** Notify the Minuit admin chat (trial requests, etc.). */
+export async function notifyAdmin(text: string) {
+  const owner = adminId();
+  if (!token() || !owner) {
+    throw new Error("Telegram admin indisponible");
+  }
+  await send(owner, text);
+}
+
 function targetOf(reply: string) {
   return reply.match(/^#(\d+)/)?.[1] || "";
 }
@@ -58,7 +67,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   }
 
   if (text === "/start") {
-    await send(chatId, "Écris ton message ici. La réponse arrivera dans cette discussion, pour l'ouverture du compte.");
+    await send(
+      chatId,
+      "Bienvenue sur Minuit.\n\nÉcris ici pour demander un compte avec 3 jours d’essai (un essai par appareil).\nExemple : Je veux un essai 3 jours — Android TV.\n\nLa réponse arrivera dans cette discussion.",
+    );
     return;
   }
 
