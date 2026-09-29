@@ -97,6 +97,7 @@ export function Player({
   const [preferredServer, setPreferredServer] = useState<string | null>(null);
   const [allowEnglish, setAllowEnglish] = useState(false);
   const [englishPrompt, setEnglishPrompt] = useState(false);
+  const [needsUnmute, setNeedsUnmute] = useState(false);
 
   const showControls = useCallback((sticky = false) => {
     setControls(true);
@@ -224,28 +225,37 @@ export function Player({
 
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = data.src;
-          const pickNativeFrench = () => {
-            const tracks = (video as HTMLVideoElement & {
-              audioTracks?: { length: number; [index: number]: { language?: string; label?: string; enabled: boolean } };
-            }).audioTracks;
-            if (!tracks || !tracks.length) return;
-            for (let index = 0; index < tracks.length; index += 1) {
-              const track = tracks[index];
-              const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
-              const isFrench =
-                hay.startsWith("fr") ||
-                hay.includes("french") ||
-                hay.includes("fran") ||
-                hay.includes("vf");
-              track.enabled = isFrench ? true : false;
-            }
-            const anyFrench = Array.from({ length: tracks.length }, (_, index) => tracks[index]).some((track) => {
-              const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
-              return hay.startsWith("fr") || hay.includes("french") || hay.includes("fran") || hay.includes("vf");
-            });
-            if (!anyFrench && allowEnglish && tracks[0]) tracks[0].enabled = true;
-          };
-          video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
+          if (!live) {
+            const pickNativeFrench = () => {
+              const tracks = (video as HTMLVideoElement & {
+                audioTracks?: {
+                  length: number;
+                  [index: number]: { language?: string; label?: string; enabled: boolean };
+                };
+              }).audioTracks;
+              if (!tracks || !tracks.length) return;
+              let frenchIndex = -1;
+              for (let index = 0; index < tracks.length; index += 1) {
+                const track = tracks[index];
+                const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
+                const isFrench =
+                  hay.startsWith("fr") ||
+                  hay.includes("french") ||
+                  hay.includes("fran") ||
+                  hay.includes("vf");
+                if (isFrench && frenchIndex < 0) frenchIndex = index;
+              }
+              if (frenchIndex >= 0) {
+                for (let index = 0; index < tracks.length; index += 1) {
+                  tracks[index].enabled = index === frenchIndex;
+                }
+              } else if (allowEnglish || tracks.length === 1) {
+                tracks[0].enabled = true;
+              }
+              // If nothing matched, leave browser defaults — never mute all tracks.
+            };
+            video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
+          }
         } else if (Hls.isSupported()) {
           hls = new Hls({
             enableWorker: true,
@@ -277,18 +287,21 @@ export function Player({
                 hls.currentLevel = avc;
               }
             }
-            const tracks = hls?.audioTracks || [];
-            const french = tracks.findIndex((track) => {
-              const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
-              return (
-                hay.startsWith("fr") ||
-                hay.includes("french") ||
-                hay.includes("fran") ||
-                hay.includes("vf") ||
-                hay.includes("truefrench")
-              );
-            });
-            if (french >= 0 && hls) hls.audioTrack = french;
+            // Live IPTV is usually muxed A/V — don't retarget audio tracks (cuts sound).
+            if (!live) {
+              const tracks = hls?.audioTracks || [];
+              const french = tracks.findIndex((track) => {
+                const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
+                return (
+                  hay.startsWith("fr") ||
+                  hay.includes("french") ||
+                  hay.includes("fran") ||
+                  hay.includes("vf") ||
+                  hay.includes("truefrench")
+                );
+              });
+              if (french >= 0 && hls) hls.audioTrack = french;
+            }
           });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
           hls.on(Hls.Events.ERROR, (_event, info) => {
@@ -320,8 +333,21 @@ export function Player({
           return;
         }
 
+        video.muted = false;
+        video.volume = 1;
+        setMuted(false);
+        setVolume(1);
+        setNeedsUnmute(false);
         video.playbackRate = speed;
-        await video.play().catch(() => undefined);
+        try {
+          await video.play();
+        } catch {
+          // Browsers block unmuted autoplay after navigation — start muted, ask one OK.
+          video.muted = true;
+          setMuted(true);
+          setNeedsUnmute(true);
+          await video.play().catch(() => undefined);
+        }
       })
       .catch(() => {
         if (!stop) {
@@ -515,7 +541,24 @@ export function Player({
     const video = videoRef.current;
     if (!video) return;
     video.muted = !video.muted;
+    if (!video.muted) {
+      video.volume = video.volume || 1;
+      setNeedsUnmute(false);
+    }
+    setMuted(video.muted);
     showControls();
+  }
+
+  function enableSound() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    video.volume = 1;
+    setMuted(false);
+    setVolume(1);
+    setNeedsUnmute(false);
+    video.play().catch(() => undefined);
+    showControls(true);
   }
 
   function setVol(value: number) {
@@ -570,13 +613,21 @@ export function Player({
     if ((event.target as HTMLElement).closest("[data-controls], [data-dialog], button, a, input")) {
       return;
     }
+    if (needsUnmute) {
+      enableSound();
+      return;
+    }
     const now = Date.now();
     const x = event.clientX;
     const width = event.currentTarget.clientWidth;
     if (now - lastTap.current.t < 280) {
-      if (x < width * 0.35) skipBy(-10);
-      else if (x > width * 0.65) skipBy(10);
-      else togglePlay();
+      if (!live) {
+        if (x < width * 0.35) skipBy(-10);
+        else if (x > width * 0.65) skipBy(10);
+        else togglePlay();
+      } else {
+        togglePlay();
+      }
       lastTap.current = { t: 0, x: 0 };
       return;
     }
@@ -707,6 +758,37 @@ export function Player({
           </div>
         ) : null}
 
+        {needsUnmute && !loading && !status && !englishPrompt ? (
+          <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/50 to-transparent pb-28 sm:items-center sm:pb-0">
+            <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
+              <p className="text-sm text-zinc-400">Son coupé</p>
+              <p className="mt-1 text-lg font-semibold">Activer le son de la chaîne ?</p>
+              <p className="mt-2 text-sm text-zinc-400">
+                Le navigateur bloque le son au démarrage — appuie sur OK.
+              </p>
+              <div className="mt-5 flex gap-3">
+                <button
+                  type="button"
+                  data-tv-focus
+                  data-tv-autofocus
+                  onClick={enableSound}
+                  className="tv-focus h-12 flex-1 rounded-md bg-[#e50914] text-sm font-semibold outline-none"
+                >
+                  Activer le son
+                </button>
+                <button
+                  type="button"
+                  data-tv-focus
+                  onClick={() => setNeedsUnmute(false)}
+                  className="tv-focus h-12 flex-1 rounded-md bg-white/10 text-sm font-medium outline-none"
+                >
+                  Plus tard
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {resumeAt && !loading && !status && !englishPrompt ? (
           <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/40 to-transparent pb-28 sm:items-center sm:pb-0">
             <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
@@ -735,7 +817,7 @@ export function Player({
         <div
           data-controls
           className={`absolute inset-0 z-20 transition-opacity duration-300 ${
-            controls || !playing || menu || resumeAt || status || englishPrompt || tv
+            controls || !playing || menu || resumeAt || status || englishPrompt || needsUnmute || tv
               ? "opacity-100"
               : "pointer-events-none opacity-0"
           }`}
