@@ -56,11 +56,14 @@ export function Player({
   episode,
   back,
   live = false,
+  saver = false,
 }: {
   id: string;
   episode?: number;
   back: string;
   live?: boolean;
+  /** Prefer the lightest HLS rung (data saver / weak networks). */
+  saver?: boolean;
 }) {
   const kind = live ? "movie" : episode ? "show" : "movie";
   const tv = useTvMode();
@@ -282,14 +285,27 @@ export function Player({
           hls.on(Hls.Events.MANIFEST_PARSED, (_event, info) => {
             onLevels(info.levels);
             if (live && hls && info.levels.length > 1) {
-              // Prefer AVC levels when available (HEVC often = son sans image).
-              const avc = info.levels.findIndex((level) => {
-                const codec = `${level.videoCodec || ""}`.toLowerCase();
-                return codec.includes("avc") || codec.includes("h264");
-              });
-              if (avc >= 0) {
-                hls.startLevel = avc;
-                hls.currentLevel = avc;
+              if (saver) {
+                let lightest = 0;
+                for (let index = 1; index < info.levels.length; index += 1) {
+                  const current = info.levels[index];
+                  const best = info.levels[lightest];
+                  const currentScore = current.height || current.bitrate || index;
+                  const bestScore = best.height || best.bitrate || lightest;
+                  if (currentScore < bestScore) lightest = index;
+                }
+                hls.startLevel = lightest;
+                hls.currentLevel = lightest;
+              } else {
+                // Prefer AVC levels when available (HEVC often = son sans image).
+                const avc = info.levels.findIndex((level) => {
+                  const codec = `${level.videoCodec || ""}`.toLowerCase();
+                  return codec.includes("avc") || codec.includes("h264");
+                });
+                if (avc >= 0) {
+                  hls.startLevel = avc;
+                  hls.currentLevel = avc;
+                }
               }
             }
             // Live IPTV is usually muxed A/V — don't retarget audio tracks (cuts sound).
@@ -369,7 +385,7 @@ export function Player({
       video.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey, preferredServer, allowEnglish, live]);
+  }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver]);
 
   useEffect(() => {
     const video = videoRef.current;
