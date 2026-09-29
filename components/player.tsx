@@ -102,11 +102,16 @@ export function Player({
   const showControls = useCallback((sticky = false) => {
     setControls(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    if (sticky || tv) return;
+    if (sticky) return;
+    // TV remote: give a bit longer, then clear chrome so the live picture is fullscreen.
     hideTimer.current = window.setTimeout(() => {
       setMenu(null);
       setControls(false);
-    }, 3200);
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest?.("[data-controls], [data-dialog]")) {
+        active.blur();
+      }
+    }, tv ? 4200 : 3200);
   }, [tv]);
 
   useEffect(() => {
@@ -374,8 +379,13 @@ export function Player({
       setPlaying(true);
       setLoading(false);
       setBuffering(false);
+      // Start the auto-hide timer so overlays don't stick forever (esp. TV live).
+      showControls();
     };
-    const onPause = () => setPlaying(false);
+    const onPause = () => {
+      setPlaying(false);
+      showControls(true);
+    };
     const onWaiting = () => setBuffering(true);
     const onPlaying = () => {
       setLoading(false);
@@ -418,7 +428,7 @@ export function Player({
       video.removeEventListener("volumechange", onVolume);
       video.removeEventListener("error", onError);
     };
-  }, []);
+  }, [showControls]);
 
   useEffect(() => {
     if (live) return;
@@ -455,7 +465,7 @@ export function Player({
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-      // Remote Back / Escape → leave player.
+      // Remote Back / Escape
       if (
         event.key === "Escape" ||
         event.key === "Backspace" ||
@@ -465,11 +475,48 @@ export function Player({
         if (menu) {
           event.preventDefault();
           setMenu(null);
+          showControls();
+          return;
+        }
+        if (needsUnmute) {
+          event.preventDefault();
+          setNeedsUnmute(false);
+          showControls();
+          return;
+        }
+        // First Back hides the chrome while watching; next Back leaves.
+        if (tv && controls) {
+          event.preventDefault();
+          setControls(false);
+          setMenu(null);
+          (document.activeElement as HTMLElement | null)?.blur?.();
           return;
         }
         event.preventDefault();
         router.push(back);
         return;
+      }
+
+      // Any remote key while chrome is hidden → bring it back first.
+      if (tv && !controls && !menu && !needsUnmute && !englishPrompt && !status) {
+        if (
+          event.key === "ArrowUp" ||
+          event.key === "ArrowDown" ||
+          event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "Enter" ||
+          event.key === " " ||
+          event.key === "MediaPlayPause"
+        ) {
+          event.preventDefault();
+          showControls();
+          window.setTimeout(() => {
+            document
+              .querySelector<HTMLElement>("[data-tv-zone='player'] [data-tv-focus]")
+              ?.focus({ preventScroll: true });
+          }, 30);
+          return;
+        }
       }
 
       // On TV, arrows move focus between controls — don't seek/volume-hijack.
@@ -480,7 +527,7 @@ export function Player({
           event.key === "ArrowLeft" ||
           event.key === "ArrowRight")
       ) {
-        showControls(true);
+        showControls();
         return;
       }
 
@@ -518,7 +565,7 @@ export function Player({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showControls, tv, live, back, menu, router]);
+  }, [showControls, tv, live, back, menu, router, controls, playing, needsUnmute, englishPrompt, status]);
 
   function skipBy(delta: number) {
     const video = videoRef.current;
@@ -558,7 +605,7 @@ export function Player({
     setVolume(1);
     setNeedsUnmute(false);
     video.play().catch(() => undefined);
-    showControls(true);
+    showControls();
   }
 
   function setVol(value: number) {
@@ -817,7 +864,7 @@ export function Player({
         <div
           data-controls
           className={`absolute inset-0 z-20 transition-opacity duration-300 ${
-            controls || !playing || menu || resumeAt || status || englishPrompt || needsUnmute || tv
+            controls || !playing || menu || resumeAt || status || englishPrompt || needsUnmute
               ? "opacity-100"
               : "pointer-events-none opacity-0"
           }`}
