@@ -96,7 +96,7 @@ export function TvLiveBrowse() {
         </div>
       </header>
 
-      <div className="space-y-3 px-10">
+      <div data-tv-zone="filters" className="space-y-3 px-10">
         <div
           ref={chipsRef}
           className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -149,7 +149,7 @@ export function TvLiveBrowse() {
 
       {status ? <p className="px-10 pt-8 text-base text-zinc-300">{status}</p> : null}
 
-      <div className="mt-8 space-y-10">
+      <div data-tv-zone="content" className="mt-8 space-y-10">
         {filtered.map((group, groupIndex) => (
           <section key={group.id}>
             <h2 className="mb-4 px-10 text-xl font-bold tracking-wide">{group.name}</h2>
@@ -216,7 +216,8 @@ function ChannelTile({ channel, autofocus }: { channel: Channel; autofocus?: boo
       ref={ref}
       href={`/watch/live/${encodeURIComponent(channel.id)}`}
       data-tv-focus
-      {...(autofocus ? { "data-tv-autofocus": true } : {})}
+      data-tv-autofocus={autofocus ? true : undefined}
+      tabIndex={0}
       className="tv-focus tv-channel group flex flex-col rounded-2xl bg-white/[0.04] p-3 text-center outline-none ring-1 ring-white/10"
     >
       <span className="mx-auto flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-zinc-950/90 p-4">

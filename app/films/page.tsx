@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
 import { GridSkeleton } from "@/components/loading";
 import { Poster, PosterGrid } from "@/components/posters";
+import { useTvMode } from "@/hooks/use-tv-mode";
 
 export default function FilmsPage() {
   return (
@@ -14,6 +15,7 @@ export default function FilmsPage() {
 }
 
 export function Catalog({ kind, title }: { kind: "movie" | "show"; title: string }) {
+  const tv = useTvMode();
   const [items, setItems] = useState<Poster[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -74,10 +76,15 @@ export function Catalog({ kind, title }: { kind: "movie" | "show"; title: string
   }
 
   return (
-    <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
-      <SiteNav />
-      <h1 className="text-3xl font-bold sm:text-4xl">{title}</h1>
-      <div className="mt-6 sm:mt-8">
+    <main
+      data-tv-zone="content"
+      className={`min-h-screen bg-black text-white ${
+        tv ? "px-10 pb-16 pt-10" : "px-4 pb-28 pt-20 sm:px-8 sm:pb-16 sm:pt-24 md:px-12"
+      }`}
+    >
+      {tv ? null : <SiteNav />}
+      <h1 className={`font-bold ${tv ? "text-4xl" : "text-3xl sm:text-4xl"}`}>{title}</h1>
+      <div className={tv ? "mt-8" : "mt-6 sm:mt-8"}>
         {loading ? <GridSkeleton /> : null}
         {!loading && items.length ? (
           <div className="rise space-y-8">
@@ -88,7 +95,10 @@ export function Catalog({ kind, title }: { kind: "movie" | "show"; title: string
                   type="button"
                   onClick={loadMore}
                   disabled={loadingMore}
-                  className="min-h-11 rounded-lg bg-white/10 px-5 py-3 text-sm font-semibold ring-1 ring-white/10 disabled:opacity-50"
+                  data-tv-focus
+                  className={`tv-focus min-h-11 rounded-lg bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10 disabled:opacity-50 ${
+                    tv ? "px-8 py-4 text-base" : ""
+                  }`}
                 >
                   {loadingMore ? "Chargement…" : "Voir plus"}
                 </button>
