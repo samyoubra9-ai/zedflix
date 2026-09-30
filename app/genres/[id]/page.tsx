@@ -98,6 +98,7 @@ function GenreCatalog() {
       <SiteNav />
       <p className="text-sm font-semibold tracking-[0.18em] text-zinc-500">GENRE</p>
       <h1 className="mt-2 text-3xl font-bold capitalize sm:text-4xl">{name}</h1>
+      <p className="mt-1 text-sm text-zinc-400">Films et séries</p>
 
       {chips.length ? (
         <div className="mt-5 -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">

@@ -7,6 +7,7 @@ import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
 import { MyListButton } from "@/components/my-list-button";
 import type { Poster } from "@/components/posters";
+import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
 type Row = { name: string; items: HeroCard[] };
@@ -213,18 +214,20 @@ export function TvBrowse() {
                     <span className="tv-live-dot h-2 w-2 rounded-full bg-white" />
                     EN DIRECT
                   </span>
-                  <span className="mt-2 block text-2xl font-bold">TV live</span>
+                  <span className="mt-2 block text-2xl font-bold">Toutes les chaînes</span>
                   <span className="mt-1 block text-sm text-white/75">
-                    Chaînes françaises · télécommande OK
+                    Catalogue FR complet · télécommande OK
                   </span>
                 </span>
                 <span className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black">
-                  Ouvrir
+                  Voir tout
                 </span>
               </span>
             </Link>
           </div>
         ) : null}
+
+        {!loading ? <LivePreviewRows tv /> : null}
 
         {!loading ? (
           <div className="px-10">

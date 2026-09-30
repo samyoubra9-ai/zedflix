@@ -382,7 +382,7 @@ function preferBest(channels: Array<LiveChannel & { rawName?: string }>) {
 async function fetchGroup(group: string): Promise<LiveChannel[]> {
   const items: RawItem[] = [];
   let cursor: number | null = null;
-  for (let page = 0; page < 20; page += 1) {
+  for (let page = 0; page < 25; page += 1) {
     const result = await fetchCatalogPage(group, cursor);
     items.push(...result.items);
     if (result.next === null) break;

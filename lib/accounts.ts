@@ -61,6 +61,54 @@ export function expirationDate(months: number) {
   return date.toISOString();
 }
 
+export function expirationFromDays(days: number) {
+  return new Date(Date.now() + days * DAY_MS).toISOString();
+}
+
+/** Add duration from remaining expiry (or from now if expired / missing). */
+function extendExpiresAt(current: string | null, amount: { months?: number; days?: number }) {
+  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
+  if (amount.days && amount.days > 0) {
+    base.setTime(base.getTime() + amount.days * DAY_MS);
+  } else if (amount.months && amount.months > 0) {
+    base.setMonth(base.getMonth() + amount.months);
+  }
+  return base.toISOString();
+}
+
+function parseExtendAmount(input: { months?: unknown; days?: unknown }) {
+  const days = Number(input.days);
+  if (Number.isFinite(days) && days > 0 && days <= 3650) {
+    return { days: Math.floor(days) };
+  }
+  const months = Number(input.months);
+  if (Number.isFinite(months) && DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    return { months };
+  }
+  throw new AccountError("Durée invalide — indique des jours (ex. 3) ou 1/3/6/12 mois", 400);
+}
+
+function parseCreateDuration(input: { months?: unknown; days?: unknown; trial?: unknown }) {
+  if (input.trial === true) {
+    return { expiresAt: null as string | null, trialUsed: false };
+  }
+  const days = Number(input.days);
+  if (Number.isFinite(days) && days > 0 && days <= 3650) {
+    return { expiresAt: expirationFromDays(Math.floor(days)), trialUsed: true };
+  }
+  const months = Number(input.months);
+  if (Number.isFinite(months) && DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    return { expiresAt: expirationDate(months), trialUsed: true };
+  }
+  if (
+    (input.months === null || input.months === undefined) &&
+    (input.days === null || input.days === undefined)
+  ) {
+    return { expiresAt: null as string | null, trialUsed: false };
+  }
+  throw new AccountError("Durée invalide — indique des jours ou 1/3/6/12 mois", 400);
+}
+
 function expiresAtOf(metadata: Record<string, unknown> | undefined) {
   const value = metadata?.expires_at;
   return typeof value === "string" ? value : null;
@@ -281,18 +329,16 @@ function accountSummary(profiles: StoredProfile[]) {
   };
 }
 
-function extendExpiresAt(current: string | null, months: number) {
-  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
-  base.setMonth(base.getMonth() + months);
-  return base.toISOString();
-}
-
 function clearProfileSeats(seats: Record<string, ProfileSeat[]>, profileId: string) {
   delete seats[profileId];
   return seats;
 }
 
-export async function createAccount(emailRaw: string, password: string, months = 1) {
+export async function createAccount(
+  emailRaw: string,
+  password: string,
+  duration: { months?: number; days?: number } = { months: 1 },
+) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -300,8 +346,9 @@ export async function createAccount(emailRaw: string, password: string, months =
   if (password.length < 8) {
     throw new AccountError("Le mot de passe doit faire au moins 8 caractères", 400);
   }
-  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-    throw new AccountError("Durée invalide", 400);
+  const created = parseCreateDuration(duration);
+  if (!created.expiresAt) {
+    throw new AccountError("Durée du profil Principal requise", 400);
   }
 
   const main: StoredProfile = {
@@ -309,7 +356,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     name: "Principal",
     pin: "",
     color: PROFILE_COLORS[0],
-    expiresAt: expirationDate(months),
+    expiresAt: created.expiresAt,
     trialUsed: true,
   };
 
@@ -333,7 +380,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email, months, lifetime: true };
+  return { email, expiresAt: created.expiresAt, lifetime: true };
 }
 
 export async function listAccounts() {
@@ -379,11 +426,9 @@ export async function deleteAccount(id: string) {
   if (error) throw new AccountError(error.message, error.status || 400);
 }
 
-export async function extendAccount(id: string, months: number) {
+export async function extendAccount(id: string, amount: { months?: number; days?: number }) {
   assertUserId(id);
-  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-    throw new AccountError("Durée invalide", 400);
-  }
+  const duration = parseExtendAmount(amount);
   const supabase = client();
   const { data, error } = await supabase.auth.admin.getUserById(id);
   if (error || !data.user) throw new AccountError("Compte introuvable", 404);
@@ -393,27 +438,34 @@ export async function extendAccount(id: string, months: number) {
   }
   const profiles = current.map((profile) => ({
     ...profile,
-    expiresAt: extendExpiresAt(profile.expiresAt, months),
+    expiresAt: extendExpiresAt(profile.expiresAt, duration),
     trialUsed: true,
   }));
   await saveProfiles(data.user.id, data.user.app_metadata, profiles, { expires_at: null });
   const summary = accountSummary(profiles);
-  return { email: data.user.email, expiresAt: summary.expiresAt, months, profiles: profiles.map(publicProfile) };
+  return {
+    email: data.user.email,
+    expiresAt: summary.expiresAt,
+    ...duration,
+    profiles: profiles.map(publicProfile),
+  };
 }
 
-export async function adminExtendProfile(userId: string, profileId: string, months: number) {
+export async function adminExtendProfile(
+  userId: string,
+  profileId: string,
+  amount: { months?: number; days?: number },
+) {
   assertUserId(userId);
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
-  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-    throw new AccountError("Durée invalide", 400);
-  }
+  const duration = parseExtendAmount(amount);
   const user = await accountUser(userId);
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === profileId);
   if (!existing) throw new AccountError("Profil introuvable", 404);
   const profile: StoredProfile = {
     ...existing,
-    expiresAt: extendExpiresAt(existing.expiresAt, months),
+    expiresAt: extendExpiresAt(existing.expiresAt, duration),
     trialUsed: true,
   };
   await saveProfiles(
@@ -950,7 +1002,7 @@ export async function adminCreateProfile(
   userId: string,
   nameRaw: string,
   pin: string,
-  months: number | null = null,
+  duration: { months?: unknown; days?: unknown; trial?: unknown } = {},
 ) {
   const name = nameRaw.trim();
   if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
@@ -958,23 +1010,14 @@ export async function adminCreateProfile(
   const current = profilesOf(user.app_metadata);
   if (current.length >= MAX_PROFILES) throw new AccountError("5 profils maximum", 400);
 
-  let expiresAt: string | null = null;
-  let trialUsed = false;
-  if (months !== null && months !== undefined) {
-    if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-      throw new AccountError("Durée invalide", 400);
-    }
-    expiresAt = expirationDate(months);
-    trialUsed = true;
-  }
-
+  const created = parseCreateDuration(duration);
   const profile: StoredProfile = {
     id: current.length === 0 ? "main" : crypto.randomUUID().replace(/-/g, ""),
     name: name.slice(0, 18),
     pin,
     color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
-    expiresAt,
-    trialUsed,
+    expiresAt: created.expiresAt,
+    trialUsed: created.trialUsed,
   };
   await saveProfiles(user.id, user.app_metadata, [...current, profile], { expires_at: null });
   return publicProfile(profile);

@@ -11,8 +11,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     requireAdmin(request);
     const { id, profileId } = await context.params;
     const body = await readJson(request);
-    if (body.extend === true || body.months) {
-      return NextResponse.json(await adminExtendProfile(id, profileId, Number(body.months)));
+    if (body.extend === true || body.months != null || body.days != null) {
+      return NextResponse.json(
+        await adminExtendProfile(id, profileId, {
+          months: body.months,
+          days: body.days,
+        }),
+      );
     }
     const profile = await adminUpdateProfile(id, profileId, String(body.name || ""), String(body.pin || ""));
     return NextResponse.json(profile);

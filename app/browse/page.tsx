@@ -11,6 +11,7 @@ import { MyListButton } from "@/components/my-list-button";
 import { Poster, PosterRow } from "@/components/posters";
 import { useTvMode } from "@/hooks/use-tv-mode";
 import { TvBrowse } from "@/components/tv/tv-browse";
+import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
 type Row = { name: string; items: HeroCard[] };
@@ -211,7 +212,7 @@ function BrowseHome() {
               href="/tv"
               className="shrink-0 rounded-full bg-[#e50914] px-3.5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(229,9,20,0.35)] sm:text-sm"
             >
-              TV en direct
+              Voir toutes les chaînes
             </Link>
             {genres.map((genre) => (
               <Link
@@ -226,6 +227,8 @@ function BrowseHome() {
         ) : null}
 
         {!loading ? <ContinueWatching /> : null}
+
+        {!loading ? <LivePreviewRows /> : null}
 
         {rows.map((row, rowIndex) => (
           <section key={row.name} className="stagger-row" style={{ animationDelay: `${rowIndex * 70}ms` }}>

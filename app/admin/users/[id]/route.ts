@@ -13,7 +13,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (body.releaseDevice === true) {
       return NextResponse.json(await releaseDevice(id));
     }
-    return NextResponse.json(await extendAccount(id, Number(body.months)));
+    return NextResponse.json(
+      await extendAccount(id, {
+        months: body.months,
+        days: body.days,
+      }),
+    );
   } catch (error) {
     return fail(error);
   }

@@ -10,6 +10,8 @@ type AccountRow = {
   expiresAt: string | null;
   expired: boolean;
   deviceBound: boolean;
+  activeProfiles?: number;
+  profileCount?: number;
 };
 
 type View = "overview" | "accounts" | "create";
@@ -20,16 +22,18 @@ type Dialog =
   | { kind: "release"; user: AccountRow }
   | { kind: "profiles"; user: AccountRow };
 
-const DURATIONS = [
+const MONTH_DURATIONS = [
   { months: 1, label: "1 mois" },
   { months: 3, label: "3 mois" },
   { months: 6, label: "6 mois" },
   { months: 12, label: "12 mois" },
 ];
 
+const DAY_PRESETS = [3, 7, 14, 30] as const;
+
 const NAV: { id: View; label: string; hint: string }[] = [
-  { id: "overview", label: "Vue d’ensemble", hint: "Activité des comptes" },
-  { id: "accounts", label: "Comptes", hint: "Prolonger, délier, supprimer" },
+  { id: "overview", label: "Vue d’ensemble", hint: "Profils et expirations" },
+  { id: "accounts", label: "Comptes", hint: "Profils, prolonger, délier" },
   { id: "create", label: "Nouveau compte", hint: "Créer un accès" },
 ];
 
@@ -53,7 +57,7 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [userPassword, setUserPassword] = useState("");
-  const [months, setMonths] = useState(1);
+  const [createDays, setCreateDays] = useState("30");
   const [users, setUsers] = useState<AccountRow[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -62,11 +66,12 @@ export default function AdminPage() {
   const [filter, setFilter] = useState<"all" | "active" | "expired">("all");
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const [extendMonths, setExtendMonths] = useState(1);
+  const [extendDays, setExtendDays] = useState("3");
   const [busy, setBusy] = useState(false);
 
-  const active = users.filter((user) => !user.expired).length;
-  const expired = users.length - active;
+  const expired = users.filter((user) => user.expired).length;
+  const profileActive = users.reduce((sum, user) => sum + (user.activeProfiles || 0), 0);
+  const profileTotal = users.reduce((sum, user) => sum + (user.profileCount || 0), 0);
   const expiringSoon = useMemo(
     () =>
       users.filter((user) => {
@@ -132,10 +137,15 @@ export default function AdminPage() {
     event.preventDefault();
     setError("");
     setNotice("");
+    const days = Number(createDays);
+    if (!Number.isFinite(days) || days < 1) {
+      setError("Indique une durée en jours (ex. 3, 30, 90)");
+      return;
+    }
     const response = await fetch("/admin/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: userPassword, months }),
+      body: JSON.stringify({ email, password: userPassword, days }),
     });
     const body = await response.json();
     if (!response.ok) {
@@ -144,8 +154,8 @@ export default function AdminPage() {
     }
     setEmail("");
     setUserPassword("");
-    setMonths(1);
-    setNotice(`Compte créé pour ${body.email}`);
+    setCreateDays("30");
+    setNotice(`Compte créé · profil Principal jusqu’au ${formatDate(body.expiresAt)}`);
     await loadUsers();
     setView("accounts");
   }
@@ -169,13 +179,18 @@ export default function AdminPage() {
 
   async function extendUser() {
     if (dialog?.kind !== "extend") return;
+    const days = Number(extendDays);
+    if (!Number.isFinite(days) || days < 1) {
+      setError("Indique une durée en jours");
+      return;
+    }
     setBusy(true);
     setError("");
     setNotice("");
     const response = await fetch(`/admin/users/${dialog.user.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ months: extendMonths }),
+      body: JSON.stringify({ days }),
     });
     const body = await response.json().catch(() => ({}));
     setBusy(false);
@@ -183,9 +198,9 @@ export default function AdminPage() {
       setError(body.error || "Prolongation impossible");
       return;
     }
-    setNotice(`Compte prolongé jusqu’au ${formatDate(body.expiresAt)}`);
+    setNotice(`Tous les profils prolongés de ${days} j. · prochaine échéance ${formatDate(body.expiresAt)}`);
     setDialog(null);
-    setExtendMonths(1);
+    setExtendDays("3");
     await loadUsers();
   }
 
@@ -326,20 +341,20 @@ export default function AdminPage() {
             <>
               <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Stat label="Comptes" value={users.length} />
-                <Stat label="Actifs" value={active} tone="text-green-400" />
-                <Stat label="Expirés" value={expired} tone="text-red-400" />
-                <Stat label="Expirent sous 7 jours" value={expiringSoon.length} tone="text-amber-300" />
+                <Stat label="Profils actifs" value={profileActive} tone="text-green-400" />
+                <Stat label="Profils total" value={profileTotal} />
+                <Stat label="Comptes sans profil actif" value={expired} tone="text-red-400" />
               </section>
               <section className="grid gap-4 lg:grid-cols-2">
-                <Panel title="Expiration proche">
+                <Panel title="Expiration profil proche (≤ 7 j.)">
                   {expiringSoon.length === 0 ? (
-                    <Empty>Aucun compte n’expire dans les 7 prochains jours.</Empty>
+                    <Empty>Aucun profil n’expire dans les 7 prochains jours.</Empty>
                   ) : (
                     expiringSoon.map((user) => (
                       <RowLine
                         key={user.id}
                         email={user.email}
-                        detail={`Expire dans ${daysUntil(user.expiresAt)} jour${daysUntil(user.expiresAt) === 1 ? "" : "s"}`}
+                        detail={`Dans ${daysUntil(user.expiresAt)} j. · ${user.activeProfiles || 0}/${user.profileCount || 0} profils`}
                       />
                     ))
                   )}
@@ -349,7 +364,11 @@ export default function AdminPage() {
                     <Empty>Aucun compte pour le moment.</Empty>
                   ) : (
                     users.slice(0, 6).map((user) => (
-                      <RowLine key={user.id} email={user.email} detail={`Créé le ${formatDate(user.createdAt)}`} />
+                      <RowLine
+                        key={user.id}
+                        email={user.email}
+                        detail={`${user.activeProfiles || 0}/${user.profileCount || 0} actifs · créé ${formatDate(user.createdAt)}`}
+                      />
                     ))
                   )}
                 </Panel>
@@ -388,12 +407,12 @@ export default function AdminPage() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-sm">
+                <table className="w-full min-w-[1040px] text-left text-sm">
                   <thead className="text-zinc-500">
                     <tr>
                       <th className="px-4 py-3 font-medium">Email</th>
-                      <th className="px-4 py-3 font-medium">Créé</th>
-                      <th className="px-4 py-3 font-medium">Expire</th>
+                      <th className="px-4 py-3 font-medium">Profils</th>
+                      <th className="px-4 py-3 font-medium">Prochaine échéance</th>
                       <th className="px-4 py-3 font-medium">Appareil</th>
                       <th className="px-4 py-3 font-medium">État</th>
                       <th className="px-4 py-3 font-medium" />
@@ -406,8 +425,18 @@ export default function AdminPage() {
                           <p>{user.email}</p>
                           <p className="text-xs text-zinc-500">Vu le {formatDate(user.lastSignInAt)}</p>
                         </td>
-                        <td className="px-4 py-3 text-zinc-300">{formatDate(user.createdAt)}</td>
-                        <td className="px-4 py-3 text-zinc-300">{formatDate(user.expiresAt)}</td>
+                        <td className="px-4 py-3 text-zinc-300">
+                          {user.activeProfiles || 0}
+                          <span className="text-zinc-500"> / {user.profileCount || 0}</span>
+                        </td>
+                        <td className="px-4 py-3 text-zinc-300">
+                          {formatDate(user.expiresAt)}
+                          {daysUntil(user.expiresAt) !== null && daysUntil(user.expiresAt)! > 0 ? (
+                            <span className="mt-0.5 block text-xs text-zinc-500">
+                              {daysUntil(user.expiresAt)} j. restants
+                            </span>
+                          ) : null}
+                        </td>
                         <td className="px-4 py-3 text-zinc-300">{user.deviceBound ? "Lié" : "Libre"}</td>
                         <td className="px-4 py-3">
                           <span
@@ -415,7 +444,7 @@ export default function AdminPage() {
                               user.expired ? "bg-red-950 text-red-300" : "bg-green-950 text-green-300"
                             }`}
                           >
-                            {user.expired ? "Expiré" : "Actif"}
+                            {user.expired ? "Sans profil actif" : "OK"}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -430,12 +459,12 @@ export default function AdminPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                setExtendMonths(1);
+                                setExtendDays("3");
                                 setDialog({ kind: "extend", user });
                               }}
                               className="rounded-lg border border-white/15 px-3 py-2 hover:bg-white/10"
                             >
-                              Prolonger
+                              + jours (tous)
                             </button>
                             <button
                               type="button"
@@ -473,7 +502,8 @@ export default function AdminPage() {
             <form onSubmit={createUser} className="max-w-xl rounded-2xl border border-white/10 bg-zinc-950 p-5">
               <h2 className="text-lg font-medium">Créer un accès</h2>
               <p className="mt-1 text-sm text-zinc-400">
-                Compte à vie · un profil Principal est créé avec la durée choisie (5 profils max, 2 appareils / profil).
+                Le compte reste à vie. Tu définis la durée du profil Principal en jours (ex. 3, 30, 90). Les autres
+                profils se gèrent ensuite dans « Profils ».
               </p>
               <label className="mt-5 block text-sm text-zinc-400">
                 Email
@@ -496,20 +526,51 @@ export default function AdminPage() {
                   className={`${fieldClass()} mt-2`}
                 />
               </label>
-              <label className="mt-4 block text-sm text-zinc-400">
-                Durée du profil Principal
-                <select
-                  value={months}
-                  onChange={(event) => setMonths(Number(event.target.value))}
-                  className={`${fieldClass()} mt-2`}
-                >
-                  {DURATIONS.map((duration) => (
-                    <option key={duration.months} value={duration.months}>
-                      {duration.label}
-                    </option>
+              <div className="mt-4">
+                <p className="text-sm text-zinc-400">Durée du profil Principal</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {DAY_PRESETS.map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setCreateDays(String(days))}
+                      className={`rounded-lg px-3 py-2 text-xs ${
+                        createDays === String(days)
+                          ? "bg-red-600 text-white"
+                          : "border border-white/15 text-zinc-300"
+                      }`}
+                    >
+                      {days} jours
+                    </button>
                   ))}
-                </select>
-              </label>
+                  {MONTH_DURATIONS.map((duration) => (
+                    <button
+                      key={duration.months}
+                      type="button"
+                      onClick={() => setCreateDays(String(duration.months * 30))}
+                      className={`rounded-lg px-3 py-2 text-xs ${
+                        createDays === String(duration.months * 30)
+                          ? "bg-red-600 text-white"
+                          : "border border-white/15 text-zinc-300"
+                      }`}
+                    >
+                      ~{duration.label}
+                    </button>
+                  ))}
+                </div>
+                <label className="mt-3 block text-sm text-zinc-400">
+                  Ou saisis le nombre de jours
+                  <input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    required
+                    value={createDays}
+                    onChange={(event) => setCreateDays(event.target.value)}
+                    className={`${fieldClass()} mt-2`}
+                  />
+                </label>
+              </div>
               <button className="mt-5 rounded-lg bg-red-600 px-4 py-3 font-medium" type="submit">
                 Créer le compte
               </button>
@@ -519,7 +580,13 @@ export default function AdminPage() {
       </div>
 
       {dialog?.kind === "profiles" ? (
-        <ProfileManager user={dialog.user} onClose={() => setDialog(null)} />
+        <ProfileManager
+          user={dialog.user}
+          onClose={() => {
+            setDialog(null);
+            loadUsers().catch(() => undefined);
+          }}
+        />
       ) : null}
 
       {dialog && dialog.kind !== "profiles" ? (
@@ -535,21 +602,52 @@ export default function AdminPage() {
             ) : null}
             {dialog.kind === "extend" ? (
               <>
-                <h2 className="text-lg font-semibold">Prolonger {dialog.user.email}</h2>
+                <h2 className="text-lg font-semibold">Prolonger tous les profils</h2>
                 <p className="mt-2 text-sm text-zinc-400">
-                  Prolonge tous les profils. Le temps restant est conservé ; si un profil est expiré, la durée repart d’aujourd’hui.
+                  {dialog.user.email} — chaque profil gagne le même nombre de jours. Si un profil est déjà expiré, on
+                  repart d’aujourd’hui.
                 </p>
-                <select
-                  value={extendMonths}
-                  onChange={(event) => setExtendMonths(Number(event.target.value))}
-                  className={`${fieldClass()} mt-4`}
-                >
-                  {DURATIONS.map((duration) => (
-                    <option key={duration.months} value={duration.months}>
-                      {duration.label}
-                    </option>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {DAY_PRESETS.map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setExtendDays(String(days))}
+                      className={`rounded-lg px-3 py-2 text-xs ${
+                        extendDays === String(days)
+                          ? "bg-red-600 text-white"
+                          : "border border-white/15 text-zinc-300"
+                      }`}
+                    >
+                      +{days} j
+                    </button>
                   ))}
-                </select>
+                  {MONTH_DURATIONS.map((duration) => (
+                    <button
+                      key={duration.months}
+                      type="button"
+                      onClick={() => setExtendDays(String(duration.months * 30))}
+                      className={`rounded-lg px-3 py-2 text-xs ${
+                        extendDays === String(duration.months * 30)
+                          ? "bg-red-600 text-white"
+                          : "border border-white/15 text-zinc-300"
+                      }`}
+                    >
+                      +{duration.label}
+                    </button>
+                  ))}
+                </div>
+                <label className="mt-4 block text-sm text-zinc-400">
+                  Jours à ajouter
+                  <input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={extendDays}
+                    onChange={(event) => setExtendDays(event.target.value)}
+                    className={`${fieldClass()} mt-2`}
+                  />
+                </label>
               </>
             ) : null}
             {dialog.kind === "release" ? (
@@ -617,8 +715,8 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
   const [createMode, setCreateMode] = useState<"trial" | "paid">("paid");
-  const [createMonths, setCreateMonths] = useState(1);
-  const [extendMonths, setExtendMonths] = useState(1);
+  const [createDays, setCreateDays] = useState("30");
+  const [extendByProfile, setExtendByProfile] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string }>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -631,6 +729,13 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
     const next = (body.profiles || []) as ManagedProfile[];
     setProfiles(next);
     setDrafts(Object.fromEntries(next.map((profile) => [profile.id, { name: profile.name, pin: "" }])));
+    setExtendByProfile((current) => {
+      const nextMap = { ...current };
+      for (const profile of next) {
+        if (!nextMap[profile.id]) nextMap[profile.id] = "3";
+      }
+      return nextMap;
+    });
   }
 
   useEffect(() => {
@@ -655,14 +760,15 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
 
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 px-6">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
         <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          5 profils max · 2 appareils / profil · essai 3 jours (1 fois / appareil) · compte à vie.
+          Expiration par profil · tu saisis les jours (3, 7, 30…) · 5 profils max · 2 appareils / profil.
         </p>
         <div className="mt-5 space-y-3">
           {profiles.map((profile) => {
             const draft = drafts[profile.id] || { name: profile.name, pin: "" };
+            const daysValue = extendByProfile[profile.id] || "3";
             return (
               <div key={profile.id} className="rounded-xl border border-white/10 p-3">
                 <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
@@ -670,6 +776,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                     className="h-3 w-3 rounded-full"
                     style={{ backgroundColor: cssColor(profile.color) }}
                   />
+                  <span className="font-medium text-zinc-200">{profile.name}</span>
                   <span>{profile.locked ? "Code défini" : "Sans code"}</span>
                   <span
                     className={`rounded-full px-2 py-0.5 ${
@@ -704,36 +811,88 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   }
                   className={`${fieldClass()} mt-2`}
                 />
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                  <select
-                    value={extendMonths}
-                    onChange={(event) => setExtendMonths(Number(event.target.value))}
-                    className="rounded-lg border border-white/10 bg-black px-2 py-2 text-xs text-white"
-                  >
-                    {DURATIONS.map((duration) => (
-                      <option key={duration.months} value={duration.months}>
-                        +{duration.label}
-                      </option>
+
+                <div className="mt-3 rounded-lg border border-white/10 bg-black/40 p-3">
+                  <p className="text-xs font-medium text-zinc-300">Prolonger ce profil</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {DAY_PRESETS.map((days) => (
+                      <button
+                        key={days}
+                        type="button"
+                        onClick={() =>
+                          setExtendByProfile((current) => ({ ...current, [profile.id]: String(days) }))
+                        }
+                        className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+                          daysValue === String(days)
+                            ? "bg-red-600 text-white"
+                            : "border border-white/15 text-zinc-300"
+                        }`}
+                      >
+                        +{days} j
+                      </button>
                     ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () => {
-                        const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ extend: true, months: extendMonths }),
-                        });
-                        const body = await response.json();
-                        if (!response.ok) throw new Error(body.error || "Prolongation impossible");
-                      })
-                    }
-                    className="rounded-lg border border-white/15 px-3 py-2 text-sm disabled:opacity-50"
-                  >
-                    Prolonger
-                  </button>
+                    {MONTH_DURATIONS.map((duration) => (
+                      <button
+                        key={duration.months}
+                        type="button"
+                        onClick={() =>
+                          setExtendByProfile((current) => ({
+                            ...current,
+                            [profile.id]: String(duration.months * 30),
+                          }))
+                        }
+                        className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+                          daysValue === String(duration.months * 30)
+                            ? "bg-red-600 text-white"
+                            : "border border-white/15 text-zinc-300"
+                        }`}
+                      >
+                        +{duration.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={3650}
+                      value={daysValue}
+                      onChange={(event) =>
+                        setExtendByProfile((current) => ({
+                          ...current,
+                          [profile.id]: event.target.value,
+                        }))
+                      }
+                      className="w-24 rounded-lg border border-white/10 bg-black px-2 py-2 text-sm text-white"
+                      aria-label="Jours à ajouter"
+                    />
+                    <span className="text-xs text-zinc-500">jours</span>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const days = Number(daysValue);
+                          if (!Number.isFinite(days) || days < 1) {
+                            throw new Error("Indique un nombre de jours valide");
+                          }
+                          const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ extend: true, days }),
+                          });
+                          const body = await response.json();
+                          if (!response.ok) throw new Error(body.error || "Prolongation impossible");
+                        })
+                      }
+                      className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      Prolonger
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
                     disabled={busy}
@@ -780,15 +939,20 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
             onSubmit={(event) => {
               event.preventDefault();
               run(async () => {
+                const payload =
+                  createMode === "trial"
+                    ? { name, pin, trial: true }
+                    : { name, pin, days: Number(createDays) };
+                if (createMode === "paid") {
+                  const days = Number(createDays);
+                  if (!Number.isFinite(days) || days < 1) {
+                    throw new Error("Indique une durée en jours");
+                  }
+                }
                 const response = await fetch(`/admin/users/${user.id}/profiles`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    name,
-                    pin,
-                    trial: createMode === "trial",
-                    months: createMode === "paid" ? createMonths : null,
-                  }),
+                  body: JSON.stringify(payload),
                 });
                 const body = await response.json();
                 if (!response.ok) throw new Error(body.error || "Création impossible");
@@ -824,7 +988,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   createMode === "paid" ? "bg-red-600 text-white" : "border border-white/15 text-zinc-300"
                 }`}
               >
-                Abonnement
+                Durée (jours)
               </button>
               <button
                 type="button"
@@ -833,21 +997,37 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   createMode === "trial" ? "bg-red-600 text-white" : "border border-white/15 text-zinc-300"
                 }`}
               >
-                Essai 3 jours
+                Essai auto 3 j.
               </button>
             </div>
             {createMode === "paid" ? (
-              <select
-                value={createMonths}
-                onChange={(event) => setCreateMonths(Number(event.target.value))}
-                className={`${fieldClass()} mt-2`}
-              >
-                {DURATIONS.map((duration) => (
-                  <option key={duration.months} value={duration.months}>
-                    {duration.label}
-                  </option>
-                ))}
-              </select>
+              <>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {DAY_PRESETS.map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setCreateDays(String(days))}
+                      className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+                        createDays === String(days)
+                          ? "bg-white text-black"
+                          : "border border-white/15 text-zinc-300"
+                      }`}
+                    >
+                      {days} j
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={createDays}
+                  onChange={(event) => setCreateDays(event.target.value)}
+                  className={`${fieldClass()} mt-2`}
+                  placeholder="Nombre de jours"
+                />
+              </>
             ) : (
               <p className="mt-2 text-xs text-zinc-500">
                 L’essai démarre au premier appareil. Un appareil déjà essayé ne peut pas relancer un essai.

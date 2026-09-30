@@ -84,7 +84,7 @@ function MobileLive() {
             <span className="tv-live-dot h-1.5 w-1.5 rounded-full bg-[#e50914]" />
             DIRECT
           </p>
-          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">TV en direct</h1>
+          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">Toutes les chaînes</h1>
           <p className="mt-2 text-sm text-zinc-400">
             {loading ? "Chargement des chaînes…" : `${total} chaîne${total > 1 ? "s" : ""}`}
           </p>
@@ -108,7 +108,7 @@ function MobileLive() {
               : "bg-white/10 text-zinc-300 ring-white/10 hover:bg-white/15"
           }`}
         >
-          Toutes
+          Toutes les chaînes
         </button>
         {groups.map((group) => (
           <button

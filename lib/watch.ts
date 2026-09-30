@@ -207,13 +207,72 @@ export async function genreCatalog(genreId: string, page = 1) {
   if (!/^[a-zA-Z0-9-]{2,60}$/.test(id)) throw new Error("Genre introuvable");
   const origin = await catalogOrigin();
   const safePage = Math.max(1, Math.min(40, Math.floor(page) || 1));
-  const path = `/film-en-streaming/${encodeURIComponent(id)}/page/${safePage}`;
-  const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
-  if (!response.ok) throw new Error("Genre indisponible");
-  const items = parseListing(await response.text(), "movie").filter(hasFrenchVersion);
+  const filmPath = `/film-en-streaming/${encodeURIComponent(id)}/page/${safePage}`;
+  const seriesSlug = seriesGenreSlug(id);
+  const seriesPaths = [
+    `/${encodeURIComponent(seriesSlug)}/page/${safePage}`,
+    `/s-tv/${encodeURIComponent(seriesSlug)}/page/${safePage}`,
+    `/${encodeURIComponent(seriesSlug)}/`,
+  ];
+
+  const [filmsHtml, seriesHtml] = await Promise.all([
+    fetch(`${origin}${filmPath}`, { headers: headers(origin), cache: "no-store" })
+      .then(async (response) => (response.ok ? response.text() : ""))
+      .catch(() => ""),
+    (async () => {
+      for (const path of seriesPaths) {
+        try {
+          const response = await fetch(`${origin}${path}`, {
+            headers: headers(origin),
+            cache: "no-store",
+          });
+          if (response.ok) return await response.text();
+        } catch {
+          // try next path
+        }
+      }
+      return "";
+    })(),
+  ]);
+
+  if (!filmsHtml && !seriesHtml) throw new Error("Genre indisponible");
+
+  const films = filmsHtml
+    ? parseListing(filmsHtml, "movie").filter(hasFrenchVersion)
+    : [];
+  const series = seriesHtml
+    ? parseListing(seriesHtml, "show").filter(hasFrenchVersion)
+    : [];
+  const items = interleaveCards(films, series);
   const genres = await listGenres();
   const name = genres.find((item) => item.id === id)?.name || id;
-  return { id, name, items, page: safePage, hasMore: items.length >= 12 };
+  return {
+    id,
+    name,
+    items,
+    page: safePage,
+    hasMore: films.length >= 12 || series.length >= 12,
+  };
+}
+
+function seriesGenreSlug(filmSlug: string) {
+  const clean = filmSlug.replace(/^\/+|\/+$/g, "");
+  if (clean.endsWith("-serie-") || clean.endsWith("-serie")) {
+    return clean.endsWith("-serie-") ? clean : `${clean}-`;
+  }
+  return `${clean.replace(/-+$/, "")}-serie-`;
+}
+
+function interleaveCards(films: WatchCard[], series: WatchCard[]) {
+  if (!films.length) return series;
+  if (!series.length) return films;
+  const out: WatchCard[] = [];
+  const max = Math.max(films.length, series.length);
+  for (let i = 0; i < max; i += 1) {
+    if (i < films.length) out.push(films[i]);
+    if (i < series.length) out.push(series[i]);
+  }
+  return out;
 }
 
 export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
