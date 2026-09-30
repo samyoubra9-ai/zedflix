@@ -11,7 +11,7 @@ import type { Poster } from "@/components/posters";
 import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
-type Row = { name: string; items: HeroCard[] };
+type Row = { name: string; items: HeroCard[]; seeAll?: string };
 
 function TvPoster({
   item,
@@ -24,6 +24,7 @@ function TvPoster({
 }) {
   const open = useOpenDetail();
   const ref = useRef<HTMLButtonElement>(null);
+  const title = item.title && item.title !== "null" ? item.title : "";
 
   useEffect(() => {
     if (autoFocus) ref.current?.focus();
@@ -50,23 +51,44 @@ function TvPoster({
           />
         ) : (
           <span className="flex h-full items-center justify-center px-2 text-center text-xs text-zinc-500">
-            {item.title}
+            {title || "Sans titre"}
           </span>
         )}
         <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 transition group-focus:opacity-100" />
         <span className="pointer-events-none absolute bottom-2 left-2 right-2 line-clamp-2 text-xs font-semibold opacity-0 transition group-focus:opacity-100">
-          {item.title}
+          {title}
         </span>
       </span>
     </button>
   );
 }
 
-function TvRow({ title, items, first = false }: { title: string; items: Poster[]; first?: boolean }) {
+function TvRow({
+  title,
+  items,
+  seeAll,
+  first = false,
+}: {
+  title: string;
+  items: Poster[];
+  seeAll?: string;
+  first?: boolean;
+}) {
   if (!items.length) return null;
   return (
     <section className="mb-8">
-      <h2 className="mb-3 px-10 text-xl font-bold tracking-wide text-white">{title}</h2>
+      <div className="mb-3 flex items-end justify-between gap-4 px-10">
+        <h2 className="min-w-0 flex-1 truncate text-xl font-bold tracking-wide text-white">{title}</h2>
+        {seeAll ? (
+          <Link
+            href={seeAll}
+            data-tv-focus
+            className="tv-focus shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300 outline-none ring-1 ring-transparent hover:text-white focus:ring-white/40"
+          >
+            Voir tout
+          </Link>
+        ) : null}
+      </div>
       <div className="flex gap-4 overflow-x-auto px-10 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {items.map((item, index) => (
           <TvPoster
@@ -103,8 +125,17 @@ export function TvBrowse() {
           setLoading(false);
           return;
         }
-        setHero(data.hero || []);
-        setRows(data.rows || []);
+        setHero((data.hero || []).filter((item) => item?.id && item?.title && item.title !== "null"));
+        setRows(
+          (data.rows || [])
+            .map((row) => ({
+              ...row,
+              items: (row.items || []).filter(
+                (item) => item?.id && item?.title && item.title !== "null",
+              ),
+            }))
+            .filter((row) => row.items.length > 0),
+        );
         setLoading(false);
       })
       .catch(() => {
@@ -239,17 +270,30 @@ export function TvBrowse() {
         ) : null}
 
         {flatRows.map((row, rowIndex) => (
-          <TvRow key={row.name} title={row.name} items={row.items} first={rowIndex === 0 && !featured} />
+          <TvRow
+            key={row.name}
+            title={row.name}
+            items={row.items}
+            seeAll={row.seeAll}
+            first={rowIndex === 0 && !featured}
+          />
         ))}
 
         {!loading ? (
-          <div className="px-10 pt-2">
+          <div className="flex flex-wrap gap-3 px-10 pt-2">
             <Link
               href="/films"
               data-tv-focus
               className="tv-focus inline-flex rounded-md bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10"
             >
               Voir tous les films
+            </Link>
+            <Link
+              href="/series"
+              data-tv-focus
+              className="tv-focus inline-flex rounded-md bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10"
+            >
+              Voir toutes les séries
             </Link>
           </div>
         ) : null}

@@ -14,7 +14,7 @@ import { TvBrowse } from "@/components/tv/tv-browse";
 import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
-type Row = { name: string; items: HeroCard[] };
+type Row = { name: string; items: HeroCard[]; seeAll?: string };
 type Genre = { id: string; name: string };
 
 export default function BrowsePage() {
@@ -47,7 +47,11 @@ function BrowseHome() {
     let stop = false;
     Promise.all([
       fetch("/api/watch/home").then(async (response) => {
-        const data = (await response.json()) as { hero?: HeroCard[]; rows?: Row[]; error?: string };
+        const data = (await response.json()) as {
+          hero?: HeroCard[];
+          rows?: Row[];
+          error?: string;
+        };
         return { response, data };
       }),
       fetch("/api/watch/genres").then(async (response) => {
@@ -62,8 +66,19 @@ function BrowseHome() {
           setLoading(false);
           return;
         }
-        setHero(home.data.hero || []);
-        setRows(home.data.rows || []);
+        const cleanHero = (home.data.hero || []).filter(
+          (item) => item?.id && item?.title && item.title !== "null",
+        );
+        const cleanRows = (home.data.rows || [])
+          .map((row) => ({
+            ...row,
+            items: (row.items || []).filter(
+              (item) => item?.id && item?.title && item.title !== "null",
+            ),
+          }))
+          .filter((row) => row.items.length > 0);
+        setHero(cleanHero);
+        setRows(cleanRows);
         setGenres(genreList);
         setLoading(false);
       })
@@ -236,7 +251,17 @@ function BrowseHome() {
 
         {rows.map((row, rowIndex) => (
           <section key={row.name} className="stagger-row" style={{ animationDelay: `${rowIndex * 70}ms` }}>
-            <h2 className="mb-2.5 text-base font-semibold sm:mb-3 sm:text-xl">{row.name}</h2>
+            <div className="mb-2.5 flex items-end justify-between gap-3 sm:mb-3">
+              <h2 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-xl">{row.name}</h2>
+              {row.seeAll ? (
+                <Link
+                  href={row.seeAll}
+                  className="shrink-0 text-xs font-medium text-zinc-400 transition hover:text-white sm:text-sm"
+                >
+                  Voir tout
+                </Link>
+              ) : null}
+            </div>
             <PosterRow items={row.items} />
           </section>
         ))}
