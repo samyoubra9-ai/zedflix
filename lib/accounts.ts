@@ -337,7 +337,7 @@ function clearProfileSeats(seats: Record<string, ProfileSeat[]>, profileId: stri
 export async function createAccount(
   emailRaw: string,
   password: string,
-  duration: { months?: number; days?: number } = { months: 1 },
+  duration: { months?: unknown; days?: unknown } = { months: 1 },
 ) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -426,7 +426,7 @@ export async function deleteAccount(id: string) {
   if (error) throw new AccountError(error.message, error.status || 400);
 }
 
-export async function extendAccount(id: string, amount: { months?: number; days?: number }) {
+export async function extendAccount(id: string, amount: { months?: unknown; days?: unknown }) {
   assertUserId(id);
   const duration = parseExtendAmount(amount);
   const supabase = client();
@@ -454,7 +454,7 @@ export async function extendAccount(id: string, amount: { months?: number; days?
 export async function adminExtendProfile(
   userId: string,
   profileId: string,
-  amount: { months?: number; days?: number },
+  amount: { months?: unknown; days?: unknown },
 ) {
   assertUserId(userId);
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
