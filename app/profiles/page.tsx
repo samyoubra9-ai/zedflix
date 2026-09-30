@@ -27,6 +27,7 @@ type Profile = {
   daysLeft?: number | null;
   warning?: "soon" | "urgent" | "expired" | null;
   warningMessage?: string | null;
+  catalogAccess?: "full" | "vod" | "live";
 };
 
 function colorCss(color: number) {
@@ -139,8 +140,9 @@ export default function ProfilesPage() {
     }
     clearPinLock(profile.id);
     saveLastProfileId(profile.id);
-    rememberWebProfile(data.profile || profile);
-    window.location.assign("/browse");
+    const selected = data.profile || profile;
+    rememberWebProfile(selected);
+    window.location.assign(selected.catalogAccess === "live" ? "/tv" : "/browse");
   }
 
   async function signOut() {

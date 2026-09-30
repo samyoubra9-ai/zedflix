@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSession } from "@/components/account";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
@@ -81,6 +82,8 @@ function TvRow({ title, items, first = false }: { title: string; items: Poster[]
 
 /** Leanback-style home matching the Android TV APK feel. */
 export function TvBrowse() {
+  const { profile } = useSession();
+  const allowLive = profile?.catalogAccess !== "vod";
   const [hero, setHero] = useState<HeroCard[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [index, setIndex] = useState(0);
@@ -199,7 +202,7 @@ export function TvBrowse() {
       ) : null}
 
       <div className={`relative z-10 ${featured ? "-mt-6" : "pt-10"}`}>
-        {!loading ? (
+        {!loading && allowLive ? (
           <div className="mb-8 px-10">
             <Link
               href="/tv"

@@ -175,6 +175,29 @@ function validPin(pin: string) {
   return pin === "" || /^\d{4}$/.test(pin);
 }
 
+export type CatalogAccess = "full" | "vod" | "live";
+
+export const CATALOG_ACCESS_OPTIONS: { id: CatalogAccess; label: string }[] = [
+  { id: "full", label: "Films, séries & TV" },
+  { id: "vod", label: "Films & séries seulement" },
+  { id: "live", label: "TV live seulement" },
+];
+
+export function parseCatalogAccess(raw: unknown): CatalogAccess {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "vod" || value === "films" || value === "series") return "vod";
+  if (value === "live" || value === "tv") return "live";
+  return "full";
+}
+
+export function catalogAllowsVod(access: CatalogAccess) {
+  return access !== "live";
+}
+
+export function catalogAllowsLive(access: CatalogAccess) {
+  return access !== "vod";
+}
+
 export type StoredProfile = {
   id: string;
   name: string;
@@ -182,6 +205,7 @@ export type StoredProfile = {
   color: number;
   expiresAt: string | null;
   trialUsed: boolean;
+  catalogAccess: CatalogAccess;
 };
 
 export type PublicProfile = {
@@ -195,6 +219,7 @@ export type PublicProfile = {
   daysLeft: number | null;
   warning: "soon" | "urgent" | "expired" | null;
   warningMessage: string | null;
+  catalogAccess: CatalogAccess;
 };
 
 function daysLeftOf(expiresAt: string | null) {
@@ -269,6 +294,7 @@ function publicProfile(profile: StoredProfile): PublicProfile {
     color: profile.color,
     locked: profile.pin.length === 4,
     expiresAt: profile.expiresAt,
+    catalogAccess: profile.catalogAccess,
     ...profileWarning(profile),
   };
 }
@@ -307,6 +333,7 @@ function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfil
           color: Number.isFinite(color) ? color : PROFILE_COLORS[0],
           expiresAt,
           trialUsed,
+          catalogAccess: parseCatalogAccess(profile.catalogAccess),
         },
       ];
     })
@@ -358,6 +385,7 @@ export async function createAccount(
     color: PROFILE_COLORS[0],
     expiresAt: created.expiresAt,
     trialUsed: true,
+    catalogAccess: "full",
   };
 
   const supabase = client();
@@ -1003,6 +1031,7 @@ export async function adminCreateProfile(
   nameRaw: string,
   pin: string,
   duration: { months?: unknown; days?: unknown; trial?: unknown } = {},
+  catalogAccessRaw: unknown = "full",
 ) {
   const name = nameRaw.trim();
   if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
@@ -1018,12 +1047,19 @@ export async function adminCreateProfile(
     color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
     expiresAt: created.expiresAt,
     trialUsed: created.trialUsed,
+    catalogAccess: parseCatalogAccess(catalogAccessRaw),
   };
   await saveProfiles(user.id, user.app_metadata, [...current, profile], { expires_at: null });
   return publicProfile(profile);
 }
 
-export async function adminUpdateProfile(userId: string, id: string, nameRaw: string, pinRaw = "") {
+export async function adminUpdateProfile(
+  userId: string,
+  id: string,
+  nameRaw: string,
+  pinRaw = "",
+  catalogAccessRaw?: unknown,
+) {
   const name = nameRaw.trim();
   const nextPin = pinRaw.trim();
   if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name) throw new AccountError("Profil invalide", 400);
@@ -1032,7 +1068,15 @@ export async function adminUpdateProfile(userId: string, id: string, nameRaw: st
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === id);
   if (!existing) throw new AccountError("Profil introuvable", 404);
-  const profile = { ...existing, name: name.slice(0, 18), pin: nextPin || existing.pin };
+  const profile: StoredProfile = {
+    ...existing,
+    name: name.slice(0, 18),
+    pin: nextPin || existing.pin,
+    catalogAccess:
+      catalogAccessRaw === undefined
+        ? existing.catalogAccess
+        : parseCatalogAccess(catalogAccessRaw),
+  };
   await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
   return publicProfile(profile);
 }

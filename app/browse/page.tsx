@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AccountGate, SiteNav } from "@/components/account";
+import { AccountGate, SiteNav, useSession } from "@/components/account";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
@@ -32,6 +32,8 @@ function BrowseSwitcher() {
 }
 
 function BrowseHome() {
+  const { profile } = useSession();
+  const allowLive = profile?.catalogAccess !== "vod";
   const [hero, setHero] = useState<HeroCard[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [genres, setGenres] = useState<Genre[]>([]);
@@ -208,12 +210,14 @@ function BrowseHome() {
 
         {!loading ? (
           <div className="stagger-row -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
-            <Link
-              href="/tv"
-              className="shrink-0 rounded-full bg-[#e50914] px-3.5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(229,9,20,0.35)] sm:text-sm"
-            >
-              Voir toutes les chaînes
-            </Link>
+            {allowLive ? (
+              <Link
+                href="/tv"
+                className="shrink-0 rounded-full bg-[#e50914] px-3.5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(229,9,20,0.35)] sm:text-sm"
+              >
+                Voir toutes les chaînes
+              </Link>
+            ) : null}
             {genres.map((genre) => (
               <Link
                 key={genre.id}

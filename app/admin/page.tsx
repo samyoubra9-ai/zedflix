@@ -31,6 +31,25 @@ const MONTH_DURATIONS = [
 
 const DAY_PRESETS = [3, 7, 14, 30] as const;
 
+const CATALOG_ACCESS = [
+  { id: "full", label: "Films, séries & TV" },
+  { id: "vod", label: "Films & séries seulement" },
+  { id: "live", label: "TV live seulement" },
+] as const;
+
+type CatalogAccess = (typeof CATALOG_ACCESS)[number]["id"];
+
+function catalogAccessLabel(value: string | undefined) {
+  return CATALOG_ACCESS.find((item) => item.id === value)?.label || CATALOG_ACCESS[0].label;
+}
+
+function parseCatalogAccess(value: unknown): CatalogAccess {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "vod" || raw === "films" || raw === "series") return "vod";
+  if (raw === "live" || raw === "tv") return "live";
+  return "full";
+}
+
 const NAV: { id: View; label: string; hint: string }[] = [
   { id: "overview", label: "Vue d’ensemble", hint: "Profils et expirations" },
   { id: "accounts", label: "Comptes", hint: "Profils, prolonger, délier" },
@@ -699,6 +718,7 @@ type ManagedProfile = {
   trialPending: boolean;
   daysLeft: number | null;
   warningMessage: string | null;
+  catalogAccess?: CatalogAccess;
 };
 
 function profileStatusLabel(profile: ManagedProfile) {
@@ -716,8 +736,11 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
   const [pin, setPin] = useState("");
   const [createMode, setCreateMode] = useState<"trial" | "paid">("paid");
   const [createDays, setCreateDays] = useState("30");
+  const [createAccess, setCreateAccess] = useState<CatalogAccess>("full");
   const [extendByProfile, setExtendByProfile] = useState<Record<string, string>>({});
-  const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string; catalogAccess: CatalogAccess }>>(
+    {},
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
@@ -728,7 +751,18 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
     if (!response.ok) throw new Error(body.error || "Impossible de charger les profils");
     const next = (body.profiles || []) as ManagedProfile[];
     setProfiles(next);
-    setDrafts(Object.fromEntries(next.map((profile) => [profile.id, { name: profile.name, pin: "" }])));
+    setDrafts(
+      Object.fromEntries(
+        next.map((profile) => [
+          profile.id,
+          {
+            name: profile.name,
+            pin: "",
+            catalogAccess: parseCatalogAccess(profile.catalogAccess),
+          },
+        ]),
+      ),
+    );
     setExtendByProfile((current) => {
       const nextMap = { ...current };
       for (const profile of next) {
@@ -763,11 +797,16 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
         <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          Expiration par profil · tu saisis les jours (3, 7, 30…) · 5 profils max · 2 appareils / profil.
+          Expiration et accès catalogue par profil · jours (3, 7, 30…) · 5 profils max · 2 appareils /
+          profil.
         </p>
         <div className="mt-5 space-y-3">
           {profiles.map((profile) => {
-            const draft = drafts[profile.id] || { name: profile.name, pin: "" };
+            const draft = drafts[profile.id] || {
+              name: profile.name,
+              pin: "",
+              catalogAccess: parseCatalogAccess(profile.catalogAccess),
+            };
             const daysValue = extendByProfile[profile.id] || "3";
             return (
               <div key={profile.id} className="rounded-xl border border-white/10 p-3">
@@ -778,6 +817,9 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   />
                   <span className="font-medium text-zinc-200">{profile.name}</span>
                   <span>{profile.locked ? "Code défini" : "Sans code"}</span>
+                  <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-zinc-300">
+                    {catalogAccessLabel(draft.catalogAccess)}
+                  </span>
                   <span
                     className={`rounded-full px-2 py-0.5 ${
                       profile.expired
@@ -811,6 +853,26 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   }
                   className={`${fieldClass()} mt-2`}
                 />
+                <label className="mt-2 block text-xs text-zinc-400">Accès catalogue</label>
+                <select
+                  value={draft.catalogAccess}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [profile.id]: {
+                        ...draft,
+                        catalogAccess: parseCatalogAccess(event.target.value),
+                      },
+                    }))
+                  }
+                  className={`${fieldClass()} mt-1`}
+                >
+                  {CATALOG_ACCESS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
 
                 <div className="mt-3 rounded-lg border border-white/10 bg-black/40 p-3">
                   <p className="text-xs font-medium text-zinc-300">Prolonger ce profil</p>
@@ -901,7 +963,11 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                         const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ name: draft.name, pin: draft.pin }),
+                          body: JSON.stringify({
+                            name: draft.name,
+                            pin: draft.pin,
+                            catalogAccess: draft.catalogAccess,
+                          }),
                         });
                         const body = await response.json();
                         if (!response.ok) throw new Error(body.error || "Modification impossible");
@@ -941,8 +1007,8 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
               run(async () => {
                 const payload =
                   createMode === "trial"
-                    ? { name, pin, trial: true }
-                    : { name, pin, days: Number(createDays) };
+                    ? { name, pin, trial: true, catalogAccess: createAccess }
+                    : { name, pin, days: Number(createDays), catalogAccess: createAccess };
                 if (createMode === "paid") {
                   const days = Number(createDays);
                   if (!Number.isFinite(days) || days < 1) {
@@ -958,6 +1024,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                 if (!response.ok) throw new Error(body.error || "Création impossible");
                 setName("");
                 setPin("");
+                setCreateAccess("full");
               });
             }}
           >
@@ -980,6 +1047,18 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
               onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
               className={`${fieldClass()} mt-2`}
             />
+            <label className="mt-2 block text-xs text-zinc-400">Accès catalogue</label>
+            <select
+              value={createAccess}
+              onChange={(event) => setCreateAccess(parseCatalogAccess(event.target.value))}
+              className={`${fieldClass()} mt-1`}
+            >
+              {CATALOG_ACCESS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <div className="mt-3 flex gap-2">
               <button
                 type="button"

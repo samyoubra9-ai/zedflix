@@ -20,11 +20,17 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     requireAdmin(request);
     const { id } = await context.params;
     const body = await readJson(request);
-    const profile = await adminCreateProfile(id, String(body.name || ""), String(body.pin || ""), {
-      trial: body.trial === true,
-      months: body.months,
-      days: body.days,
-    });
+    const profile = await adminCreateProfile(
+      id,
+      String(body.name || ""),
+      String(body.pin || ""),
+      {
+        trial: body.trial === true,
+        months: body.months,
+        days: body.days,
+      },
+      body.catalogAccess,
+    );
     return NextResponse.json(profile);
   } catch (error) {
     return fail(error);

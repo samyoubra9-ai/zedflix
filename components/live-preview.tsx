@@ -2,16 +2,23 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSession } from "@/components/account";
 
 type Channel = { id: string; name: string; logo: string };
 type Group = { id: string; name: string; channels: Channel[] };
 
 /** Home Live preview rows + see-all CTA (same idea as Android Live home). */
 export function LivePreviewRows({ tv = false }: { tv?: boolean }) {
+  const { profile } = useSession();
   const [groups, setGroups] = useState<Group[]>([]);
   const [ready, setReady] = useState(false);
+  const allowed = profile?.catalogAccess !== "vod";
 
   useEffect(() => {
+    if (!allowed) {
+      setReady(true);
+      return;
+    }
     let stop = false;
     fetch("/api/watch/live")
       .then(async (response) => {
@@ -26,9 +33,9 @@ export function LivePreviewRows({ tv = false }: { tv?: boolean }) {
     return () => {
       stop = true;
     };
-  }, []);
+  }, [allowed]);
 
-  if (!ready || !groups.length) return null;
+  if (!allowed || !ready || !groups.length) return null;
 
   const all = groups.flatMap((group) => group.channels);
   const previewGroups: Group[] = [

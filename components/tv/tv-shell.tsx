@@ -17,12 +17,12 @@ import {
 import { TvSpatialNav } from "./spatial-nav";
 
 const NAV = [
-  { href: "/search", label: "Recherche", Icon: IconSearch },
-  { href: "/browse", label: "Accueil", Icon: IconHome },
-  { href: "/films", label: "Films", Icon: IconFilm },
-  { href: "/series", label: "Séries", Icon: IconTv },
-  { href: "/tv", label: "TV live", Icon: IconLive },
-  { href: "/list", label: "Ma liste", Icon: IconList },
+  { href: "/search", label: "Recherche", Icon: IconSearch, needs: "vod" as const },
+  { href: "/browse", label: "Accueil", Icon: IconHome, needs: "vod" as const },
+  { href: "/films", label: "Films", Icon: IconFilm, needs: "vod" as const },
+  { href: "/series", label: "Séries", Icon: IconTv, needs: "vod" as const },
+  { href: "/tv", label: "TV live", Icon: IconLive, needs: "live" as const },
+  { href: "/list", label: "Ma liste", Icon: IconList, needs: "vod" as const },
 ] as const;
 
 function colorCss(color: number) {
@@ -35,12 +35,25 @@ function active(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function allowsVod(access?: string | null) {
+  return access !== "live";
+}
+
+function allowsLive(access?: string | null) {
+  return access !== "vod";
+}
+
 /** Android-TV style chrome: left rail + focused content pane. */
 export function TvShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { profile } = useSession();
   const [expanded, setExpanded] = useState(false);
+  const access = profile?.catalogAccess;
+  const links = NAV.filter((item) => {
+    if (item.needs === "live") return allowsLive(access);
+    return allowsVod(access);
+  });
 
   async function switchProfile() {
     await fetch("/auth/web/profiles", {
@@ -93,7 +106,7 @@ export function TvShell({ children }: { children: ReactNode }) {
         </button>
 
         <nav className="mt-8 flex flex-1 flex-col gap-1.5 px-3">
-          {NAV.map(({ href, label, Icon }) => {
+          {links.map(({ href, label, Icon }) => {
             const isActive = active(pathname, href);
             return (
               <Link
