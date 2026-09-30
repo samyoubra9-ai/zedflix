@@ -42,3 +42,6 @@ next-env.d.ts
 
 # account database and signing secret
 /data
+
+# telegram support session store
+.data
