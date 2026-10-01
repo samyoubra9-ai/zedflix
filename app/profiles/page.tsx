@@ -164,12 +164,6 @@ export default function ProfilesPage() {
       <h1 className="mt-8 text-center text-2xl font-semibold sm:mt-10 sm:text-5xl">Qui regarde ?</h1>
       <p className="mt-3 max-w-full truncate px-4 text-sm text-zinc-400">{email}</p>
 
-      {initials.some((profile) => profile.warningMessage && !profile.expired) ? (
-        <p className="mt-4 max-w-lg rounded-xl border border-amber-500/25 bg-amber-950/40 px-4 py-3 text-center text-sm text-amber-100">
-          {initials.find((profile) => profile.warningMessage && !profile.expired)?.warningMessage}
-        </p>
-      ) : null}
-
       {initials.length ? (
         <ul className="mt-10 flex max-w-4xl flex-wrap justify-center gap-5 sm:mt-12 sm:gap-8">
           {initials.map((profile) => (

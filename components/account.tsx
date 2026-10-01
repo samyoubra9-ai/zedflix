@@ -36,6 +36,16 @@ export function catalogAccessOf(profile: { catalogAccess?: string } | null | und
   return "full";
 }
 
+function shortExpiry(message: string) {
+  const days = message.match(/(\d+)\s+jour/);
+  if (days) return `Expire dans ${days[1]} j.`;
+  if (/demain/i.test(message)) return "Expire demain";
+  if (/aujourd/i.test(message)) return "Expire aujourd’hui";
+  if (/essai/i.test(message)) return "Essai 3 jours";
+  if (/expir/i.test(message)) return "Profil expiré";
+  return message.length > 36 ? `${message.slice(0, 34)}…` : message;
+}
+
 export function catalogHome(access: CatalogAccess) {
   return access === "live" ? "/tv" : "/browse";
 }
@@ -153,6 +163,7 @@ export function AccountGate({
   const tv = useTvMode();
   const [elsewhere, setElsewhere] = useState(false);
   const [expiryNotice, setExpiryNotice] = useState<string | null>(null);
+  const [expiryDismissed, setExpiryDismissed] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -198,7 +209,15 @@ export function AccountGate({
       }
       if (response.ok && data.profile === false) setElsewhere(true);
       else setElsewhere(false);
-      setExpiryNotice(data.warningMessage || null);
+      const notice = data.warningMessage || null;
+      setExpiryNotice(notice);
+      if (notice) {
+        try {
+          setExpiryDismissed(sessionStorage.getItem("minuit_expiry_dismiss") === notice);
+        } catch {
+          setExpiryDismissed(false);
+        }
+      }
     }
     check();
     const timer = window.setInterval(check, 60_000);
@@ -278,10 +297,25 @@ export function AccountGate({
             </button>
           </div>
         </div>
-      ) : expiryNotice ? (
-        <div className="fixed inset-x-0 top-14 z-50 px-4 sm:top-16 sm:px-8 md:px-12">
-          <div className="rounded-xl border border-amber-500/30 bg-amber-950/90 px-4 py-3 text-sm text-amber-50 shadow-xl backdrop-blur">
-            {expiryNotice}
+      ) : expiryNotice && !player && !expiryDismissed ? (
+        <div className="pointer-events-none fixed bottom-[5.5rem] right-3 z-40 md:bottom-6 md:right-6">
+          <div className="pointer-events-auto flex max-w-[15rem] items-center gap-2 rounded-full bg-black/85 py-1 pl-3 pr-1 text-[11px] text-zinc-200 shadow-lg ring-1 ring-white/15 backdrop-blur">
+            <span className="truncate">{shortExpiry(expiryNotice)}</span>
+            <button
+              type="button"
+              aria-label="Fermer"
+              onClick={() => {
+                setExpiryDismissed(true);
+                try {
+                  sessionStorage.setItem("minuit_expiry_dismiss", expiryNotice);
+                } catch {
+                  /* private mode */
+                }
+              }}
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-sm text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              ×
+            </button>
           </div>
         </div>
       ) : null}
