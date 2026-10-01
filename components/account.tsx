@@ -27,7 +27,28 @@ type ProfileInfo = {
   locked: boolean;
   warningMessage?: string | null;
   daysLeft?: number | null;
+  catalogAccess?: "full" | "vod" | "live";
 };
+
+export type CatalogAccess = "full" | "vod" | "live";
+
+export function catalogAccessOf(profile: { catalogAccess?: string } | null | undefined): CatalogAccess {
+  if (profile?.catalogAccess === "vod" || profile?.catalogAccess === "live") return profile.catalogAccess;
+  return "full";
+}
+
+export function catalogHome(access: CatalogAccess) {
+  return access === "live" ? "/tv" : "/browse";
+}
+
+export function catalogAllowsPath(pathname: string, access: CatalogAccess) {
+  if (pathname.startsWith("/account") || pathname.startsWith("/profiles")) return true;
+  if (access === "full") return true;
+  const live =
+    pathname === "/tv" || pathname.startsWith("/tv/") || pathname.startsWith("/watch/live");
+  if (access === "live") return live;
+  return !live;
+}
 type SessionState = { email: string; profile: ProfileInfo | null };
 
 /** null = not checked yet; false = logged out; object = logged in */
@@ -122,6 +143,10 @@ export function AccountGate({
     }
     if (!profile) {
       router.replace("/profiles");
+      return;
+    }
+    if (!catalogAllowsPath(pathname, catalogAccessOf(profile))) {
+      router.replace(catalogHome(catalogAccessOf(profile)));
     }
   }, [ready, email, profile, pathname, router, expired]);
 
@@ -139,6 +164,7 @@ export function AccountGate({
       const data = (await response.json()) as {
         profile?: boolean;
         expired?: boolean;
+        released?: boolean;
         warningMessage?: string | null;
       };
       if (response.ok && data.expired) {
@@ -146,17 +172,56 @@ export function AccountGate({
         router.replace("/profiles?expired=1");
         return;
       }
+      if (response.ok && data.released) {
+        forgetWebProfile();
+        router.replace("/profiles");
+        return;
+      }
       if (response.ok && data.profile === false) setElsewhere(true);
       else setElsewhere(false);
       setExpiryNotice(data.warningMessage || null);
     }
     check();
-    const timer = window.setInterval(check, 25_000);
+    const timer = window.setInterval(check, 60_000);
     return () => {
       stop = true;
       window.clearInterval(timer);
     };
   }, [ready, email, profile, pathname, router]);
+
+  useEffect(() => {
+    if (!ready || !email || !profile) return;
+    let timer = 0;
+    let released = false;
+    function onVisibility() {
+      if (document.visibilityState === "hidden") {
+        window.clearTimeout(timer);
+        released = false;
+        timer = window.setTimeout(() => {
+          released = true;
+          void fetch("/auth/web/profiles", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clear: true }),
+          });
+          forgetWebProfile();
+        }, 60_000);
+        return;
+      }
+      window.clearTimeout(timer);
+      if (released) {
+        released = false;
+        forgetWebProfile();
+        router.replace("/profiles");
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearTimeout(timer);
+    };
+  }, [ready, email, profile, router]);
 
   async function leaveProfile() {
     await fetch("/auth/web/profiles", {
@@ -277,7 +342,9 @@ export function SiteNav() {
     router.replace("/profiles");
   }
 
-  const desktopLinks = LINKS.filter((link) => link.href !== "/search");
+  const access = catalogAccessOf(profile);
+  const links = LINKS.filter((link) => catalogAllowsPath(link.href, access));
+  const desktopLinks = links.filter((link) => link.href !== "/search");
 
   return (
     <>
@@ -289,7 +356,7 @@ export function SiteNav() {
         }`}
       >
         <div className="flex h-14 items-center gap-3 px-4 sm:h-16 sm:gap-6 sm:px-8 md:px-12">
-          <Link href="/browse" className="text-xl font-bold tracking-tight text-red-600 sm:text-2xl">
+          <Link href={catalogHome(access)} className="text-xl font-bold tracking-tight text-red-600 sm:text-2xl">
             MINUIT
           </Link>
 
@@ -390,8 +457,11 @@ export function SiteNav() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-black/95 backdrop-blur-md md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="grid h-[3.75rem] grid-cols-6">
-          {LINKS.map(({ href, label, Icon }) => {
+        <div
+          className="grid h-[3.75rem]"
+          style={{ gridTemplateColumns: `repeat(${Math.max(links.length, 1)}, minmax(0, 1fr))` }}
+        >
+          {links.map(({ href, label, Icon }) => {
             const active = linkActive(pathname, href);
             return (
               <Link

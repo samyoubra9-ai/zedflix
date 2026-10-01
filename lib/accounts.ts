@@ -54,6 +54,21 @@ const MAX_PROFILES = 5;
 const PROFILE_SEATS = 2;
 const TRIAL_MS = 3 * 24 * 60 * 60 * 1000;
 const DAY_MS = 86_400_000;
+/** Drop a seat when the app stops sending presence (process killed). */
+const SEAT_TTL_MS = 3 * 60 * 1000;
+const SEAT_TOUCH_MS = 45_000;
+
+export type CatalogAccess = "full" | "vod" | "live";
+
+export function parseCatalogAccess(raw: unknown, fallback: CatalogAccess = "full"): CatalogAccess {
+  const value = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (value === "vod" || value === "films" || value === "series" || value === "standard") return "vod";
+  if (value === "live" || value === "tv") return "live";
+  if (value === "full" || value === "all") return "full";
+  return fallback;
+}
 
 export function expirationDate(months: number) {
   const date = new Date();
@@ -105,8 +120,25 @@ function seatCount(metadata: Record<string, unknown> | undefined) {
   return Object.values(seatsOf(metadata)).reduce((total, list) => total + list.length, 0);
 }
 
+function seatFresh(seat: ProfileSeat, now = Date.now()) {
+  return now - seat.at < SEAT_TTL_MS;
+}
+
+function pruneStaleSeats(seats: Record<string, ProfileSeat[]>, now = Date.now()) {
+  let changed = false;
+  const next: Record<string, ProfileSeat[]> = {};
+  for (const [profileId, list] of Object.entries(seats)) {
+    const kept = list.filter((seat) => seatFresh(seat, now));
+    if (kept.length !== list.length) changed = true;
+    if (kept.length) next[profileId] = kept;
+  }
+  return { seats: next, changed };
+}
+
 function holdsSeat(metadata: Record<string, unknown> | undefined, profileId: string, deviceId: string) {
-  return (seatsOf(metadata)[profileId] || []).some((seat) => seat.deviceId === deviceId);
+  return (seatsOf(metadata)[profileId] || []).some(
+    (seat) => seat.deviceId === deviceId && seatFresh(seat),
+  );
 }
 
 function trialsOf(metadata: Record<string, unknown> | undefined): Record<string, number> {
@@ -134,6 +166,8 @@ export type StoredProfile = {
   color: number;
   expiresAt: string | null;
   trialUsed: boolean;
+  /** full = Standard + TV, vod = Standard, live = TV seulement. Missing on old profiles = full. */
+  catalogAccess: CatalogAccess;
 };
 
 export type PublicProfile = {
@@ -147,6 +181,7 @@ export type PublicProfile = {
   daysLeft: number | null;
   warning: "soon" | "urgent" | "expired" | null;
   warningMessage: string | null;
+  catalogAccess: CatalogAccess;
 };
 
 function daysLeftOf(expiresAt: string | null) {
@@ -221,6 +256,7 @@ function publicProfile(profile: StoredProfile): PublicProfile {
     color: profile.color,
     locked: profile.pin.length === 4,
     expiresAt: profile.expiresAt,
+    catalogAccess: profile.catalogAccess,
     ...profileWarning(profile),
   };
 }
@@ -259,6 +295,7 @@ function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfil
           color: Number.isFinite(color) ? color : PROFILE_COLORS[0],
           expiresAt,
           trialUsed,
+          catalogAccess: parseCatalogAccess(profile.catalogAccess, "full"),
         },
       ];
     })
@@ -311,6 +348,7 @@ export async function createAccount(emailRaw: string, password: string, months =
     color: PROFILE_COLORS[0],
     expiresAt: expirationDate(months),
     trialUsed: true,
+    catalogAccess: "vod",
   };
 
   const supabase = client();
@@ -500,13 +538,21 @@ export async function presence(accessToken: string, deviceId: string, profileId 
   const profiles = profilesOf(data.user.app_metadata);
   const profile = profiles.find((item) => item.id === profileId);
   if (!profile) {
-    return { ok: true, profile: false, expired: false, warning: null, warningMessage: null, daysLeft: null };
+    return {
+      ok: true,
+      profile: false,
+      expired: false,
+      released: true,
+      warning: null,
+      warningMessage: null,
+      daysLeft: null,
+    };
   }
 
   const status = profileWarning(profile);
   if (status.expired) {
     const seats = seatsOf(data.user.app_metadata);
-    if (holdsSeat(data.user.app_metadata, profileId, deviceId)) {
+    if (seats[profileId]?.length) {
       clearProfileSeats(seats, profileId);
       await saveSeats(data.user.id, data.user.app_metadata, seats);
     }
@@ -514,17 +560,32 @@ export async function presence(accessToken: string, deviceId: string, profileId 
       ok: true,
       profile: false,
       expired: true,
+      released: true,
+      catalogAccess: profile.catalogAccess,
       warning: status.warning,
       warningMessage: status.warningMessage,
       daysLeft: status.daysLeft,
     };
   }
 
-  const held = holdsSeat(data.user.app_metadata, profileId, deviceId);
+  const now = Date.now();
+  const pruned = pruneStaleSeats(seatsOf(data.user.app_metadata), now);
+  const list = pruned.seats[profileId] || [];
+  const mine = list.find((seat) => seat.deviceId === deviceId);
+  let changed = pruned.changed;
+  if (mine && now - mine.at >= SEAT_TOUCH_MS) {
+    mine.at = now;
+    changed = true;
+  }
+  if (changed) await saveSeats(data.user.id, data.user.app_metadata, pruned.seats);
+  const held = Boolean(mine);
+  const someoneElse = list.some((seat) => seat.deviceId !== deviceId && seatFresh(seat, now));
   return {
     ok: true,
     profile: held,
     expired: false,
+    released: !held && !someoneElse,
+    catalogAccess: profile.catalogAccess,
     warning: held ? status.warning : null,
     warningMessage: held ? status.warningMessage : null,
     daysLeft: held ? status.daysLeft : null,
@@ -951,6 +1012,7 @@ export async function adminCreateProfile(
   nameRaw: string,
   pin: string,
   months: number | null = null,
+  catalogRaw: unknown = "vod",
 ) {
   const name = nameRaw.trim();
   if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
@@ -975,12 +1037,19 @@ export async function adminCreateProfile(
     color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
     expiresAt,
     trialUsed,
+    catalogAccess: parseCatalogAccess(catalogRaw, "vod"),
   };
   await saveProfiles(user.id, user.app_metadata, [...current, profile], { expires_at: null });
   return publicProfile(profile);
 }
 
-export async function adminUpdateProfile(userId: string, id: string, nameRaw: string, pinRaw = "") {
+export async function adminUpdateProfile(
+  userId: string,
+  id: string,
+  nameRaw: string,
+  pinRaw = "",
+  catalogRaw?: unknown,
+) {
   const name = nameRaw.trim();
   const nextPin = pinRaw.trim();
   if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name) throw new AccountError("Profil invalide", 400);
@@ -989,7 +1058,16 @@ export async function adminUpdateProfile(userId: string, id: string, nameRaw: st
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === id);
   if (!existing) throw new AccountError("Profil introuvable", 404);
-  const profile = { ...existing, name: name.slice(0, 18), pin: nextPin || existing.pin };
+  const catalogAccess =
+    catalogRaw === undefined || catalogRaw === null || String(catalogRaw).trim() === ""
+      ? existing.catalogAccess
+      : parseCatalogAccess(catalogRaw, existing.catalogAccess);
+  const profile = {
+    ...existing,
+    name: name.slice(0, 18),
+    pin: nextPin || existing.pin,
+    catalogAccess,
+  };
   await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
   return publicProfile(profile);
 }

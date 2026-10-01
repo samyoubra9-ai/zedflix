@@ -30,6 +30,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       String(body.name || ""),
       String(body.pin || ""),
       months,
+      body.catalogAccess ?? "vod",
     );
     return NextResponse.json(profile);
   } catch (error) {

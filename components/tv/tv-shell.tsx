@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useState } from "react";
-import { useSession } from "@/components/account";
+import { catalogAccessOf, catalogAllowsPath, useSession } from "@/components/account";
 import {
   IconFilm,
   IconHome,
@@ -93,7 +93,7 @@ export function TvShell({ children }: { children: ReactNode }) {
         </button>
 
         <nav className="mt-8 flex flex-1 flex-col gap-1.5 px-3">
-          {NAV.map(({ href, label, Icon }) => {
+          {NAV.filter(({ href }) => catalogAllowsPath(href, catalogAccessOf(profile))).map(({ href, label, Icon }) => {
             const isActive = active(pathname, href);
             return (
               <Link

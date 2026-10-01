@@ -7,6 +7,8 @@ import {
   rememberWebSession,
   rememberWebProfile,
   forgetWebProfile,
+  catalogAccessOf,
+  catalogHome,
 } from "@/components/account";
 import { Spinner } from "@/components/loading";
 import { PinPad, clearPinLock, notePinFail, usePinLockCountdown } from "@/components/pin-pad";
@@ -22,6 +24,7 @@ type Profile = {
   daysLeft?: number | null;
   warning?: "soon" | "urgent" | "expired" | null;
   warningMessage?: string | null;
+  catalogAccess?: "full" | "vod" | "live";
 };
 
 function colorCss(color: number) {
@@ -117,8 +120,9 @@ export default function ProfilesPage() {
     }
     clearPinLock(profile.id);
     saveLastProfileId(profile.id);
-    rememberWebProfile(data.profile || profile);
-    window.location.assign("/browse");
+    const opened = data.profile || profile;
+    rememberWebProfile(opened);
+    window.location.assign(catalogHome(catalogAccessOf(opened)));
   }
 
   async function signOut() {

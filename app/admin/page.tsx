@@ -591,6 +591,23 @@ export default function AdminPage() {
   );
 }
 
+type Offer = "vod" | "full" | "live";
+
+const OFFERS: { id: Offer; label: string; detail: string }[] = [
+  { id: "vod", label: "Standard", detail: "Films, séries et animés" },
+  { id: "full", label: "Standard + TV", detail: "Films, séries, animés et TV Live" },
+  { id: "live", label: "TV seulement", detail: "TV Live uniquement" },
+];
+
+function asOffer(value: string | undefined): Offer {
+  if (value === "vod" || value === "live" || value === "full") return value;
+  return "full";
+}
+
+function offerLabel(value: string | undefined) {
+  return OFFERS.find((offer) => offer.id === asOffer(value))?.label || "Standard + TV";
+}
+
 type ManagedProfile = {
   id: string;
   name: string;
@@ -601,7 +618,10 @@ type ManagedProfile = {
   trialPending: boolean;
   daysLeft: number | null;
   warningMessage: string | null;
+  catalogAccess?: Offer;
 };
+
+type ProfileDraft = { name: string; pin: string; catalogAccess: Offer; months: number };
 
 function profileStatusLabel(profile: ManagedProfile) {
   if (profile.trialPending) return "Essai 3 j. en attente";
@@ -618,8 +638,8 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
   const [pin, setPin] = useState("");
   const [createMode, setCreateMode] = useState<"trial" | "paid">("paid");
   const [createMonths, setCreateMonths] = useState(1);
-  const [extendMonths, setExtendMonths] = useState(1);
-  const [drafts, setDrafts] = useState<Record<string, { name: string; pin: string }>>({});
+  const [createAccess, setCreateAccess] = useState<Offer>("vod");
+  const [drafts, setDrafts] = useState<Record<string, ProfileDraft>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
@@ -630,7 +650,19 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
     if (!response.ok) throw new Error(body.error || "Impossible de charger les profils");
     const next = (body.profiles || []) as ManagedProfile[];
     setProfiles(next);
-    setDrafts(Object.fromEntries(next.map((profile) => [profile.id, { name: profile.name, pin: "" }])));
+    setDrafts(
+      Object.fromEntries(
+        next.map((profile) => [
+          profile.id,
+          {
+            name: profile.name,
+            pin: "",
+            catalogAccess: asOffer(profile.catalogAccess),
+            months: 1,
+          },
+        ]),
+      ),
+    );
   }
 
   useEffect(() => {
@@ -658,11 +690,18 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
         <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          5 profils max · 2 appareils / profil · essai 3 jours (1 fois / appareil) · compte à vie.
+          Chaque profil a sa propre offre et sa propre date. Standard : films, séries et animés.
+          Standard + TV ajoute la TV. TV seulement n’ouvre que la TV. Les profils déjà créés restent
+          Standard + TV tant que l’offre n’est pas changée.
         </p>
         <div className="mt-5 space-y-3">
           {profiles.map((profile) => {
-            const draft = drafts[profile.id] || { name: profile.name, pin: "" };
+            const draft = drafts[profile.id] || {
+              name: profile.name,
+              pin: "",
+              catalogAccess: asOffer(profile.catalogAccess),
+              months: 1,
+            };
             return (
               <div key={profile.id} className="rounded-xl border border-white/10 p-3">
                 <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
@@ -671,6 +710,9 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                     style={{ backgroundColor: cssColor(profile.color) }}
                   />
                   <span>{profile.locked ? "Code défini" : "Sans code"}</span>
+                  <span className="rounded-full bg-white/10 px-2 py-0.5 text-zinc-200">
+                    {offerLabel(draft.catalogAccess)}
+                  </span>
                   <span
                     className={`rounded-full px-2 py-0.5 ${
                       profile.expired
@@ -704,10 +746,32 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   }
                   className={`${fieldClass()} mt-2`}
                 />
+                <label className="mt-3 block text-xs text-zinc-500">Offre</label>
+                <select
+                  value={draft.catalogAccess}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [profile.id]: { ...draft, catalogAccess: asOffer(event.target.value) },
+                    }))
+                  }
+                  className={`${fieldClass()} mt-1`}
+                >
+                  {OFFERS.map((offer) => (
+                    <option key={offer.id} value={offer.id}>
+                      {offer.label} — {offer.detail}
+                    </option>
+                  ))}
+                </select>
                 <div className="mt-3 flex flex-wrap justify-end gap-2">
                   <select
-                    value={extendMonths}
-                    onChange={(event) => setExtendMonths(Number(event.target.value))}
+                    value={draft.months}
+                    onChange={(event) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [profile.id]: { ...draft, months: Number(event.target.value) },
+                      }))
+                    }
                     className="rounded-lg border border-white/10 bg-black px-2 py-2 text-xs text-white"
                   >
                     {DURATIONS.map((duration) => (
@@ -724,7 +788,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                         const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ extend: true, months: extendMonths }),
+                          body: JSON.stringify({ extend: true, months: draft.months }),
                         });
                         const body = await response.json();
                         if (!response.ok) throw new Error(body.error || "Prolongation impossible");
@@ -742,7 +806,11 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                         const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ name: draft.name, pin: draft.pin }),
+                          body: JSON.stringify({
+                            name: draft.name,
+                            pin: draft.pin,
+                            catalogAccess: draft.catalogAccess,
+                          }),
                         });
                         const body = await response.json();
                         if (!response.ok) throw new Error(body.error || "Modification impossible");
@@ -788,6 +856,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                     pin,
                     trial: createMode === "trial",
                     months: createMode === "paid" ? createMonths : null,
+                    catalogAccess: createAccess,
                   }),
                 });
                 const body = await response.json();
@@ -836,6 +905,18 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                 Essai 3 jours
               </button>
             </div>
+            <label className="mt-3 block text-xs text-zinc-500">Offre</label>
+            <select
+              value={createAccess}
+              onChange={(event) => setCreateAccess(asOffer(event.target.value))}
+              className={`${fieldClass()} mt-1`}
+            >
+              {OFFERS.map((offer) => (
+                <option key={offer.id} value={offer.id}>
+                  {offer.label} — {offer.detail}
+                </option>
+              ))}
+            </select>
             {createMode === "paid" ? (
               <select
                 value={createMonths}

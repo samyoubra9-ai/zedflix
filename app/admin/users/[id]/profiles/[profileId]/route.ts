@@ -14,7 +14,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (body.extend === true || body.months) {
       return NextResponse.json(await adminExtendProfile(id, profileId, Number(body.months)));
     }
-    const profile = await adminUpdateProfile(id, profileId, String(body.name || ""), String(body.pin || ""));
+    const profile = await adminUpdateProfile(
+      id,
+      profileId,
+      String(body.name || ""),
+      String(body.pin || ""),
+      body.catalogAccess,
+    );
     return NextResponse.json(profile);
   } catch (error) {
     return fail(error);
