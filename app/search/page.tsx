@@ -1,15 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useRef, useState } from "react";
-import { AccountGate, SiteNav } from "@/components/account";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { AccountGate, SiteNav, currentCatalogTab, type CatalogTab } from "@/components/account";
 import { IconSearch } from "@/components/icons";
 import { GridSkeleton } from "@/components/loading";
 import { useOpenDetail } from "@/components/detail";
 import { Poster, PosterGrid } from "@/components/posters";
 
 type PersonHit = { id: string; name: string; count: number };
-type ExtraHit = Poster & { source?: string };
 
 export default function SearchPage() {
   return (
@@ -20,32 +20,64 @@ export default function SearchPage() {
 }
 
 function Search() {
+  const router = useRouter();
+  const [tab, setTab] = useState<CatalogTab>("stream");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Poster[]>([]);
-  const [extra, setExtra] = useState<ExtraHit[]>([]);
   const [people, setPeople] = useState<PersonHit[]>([]);
   const [loading, setLoading] = useState(false);
-  const [extraNote, setExtraNote] = useState("");
-  const [status, setStatus] = useState("Cherche un film, une série ou un acteur.");
+  const [status, setStatus] = useState("Cherche un titre.");
   const openDetail = useOpenDetail();
   const requestId = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const current = currentCatalogTab();
+    setTab(current);
+    setStatus(current === "anime" ? "Cherche un animé." : current === "live" ? "Cherche une chaîne." : "Cherche un film ou une série.");
+  }, []);
+
+  async function openItem(item: Poster) {
+    const direct = item.id && !item.id.startsWith("m-") && !item.id.startsWith("a-");
+    if (direct) {
+      openDetail(item);
+      return;
+    }
+    setStatus("Ouverture…");
+    try {
+      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await response.json()) as { result?: Poster; error?: string };
+      if (!response.ok || !data.result?.id) {
+        setStatus("Pas encore disponible à la lecture");
+        return;
+      }
+      setStatus("");
+      openDetail(data.result);
+    } catch {
+      setStatus("Pas encore disponible à la lecture");
+    }
+  }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (query.trim().length < 2) return;
     const q = query.trim();
+    if (tab === "live") {
+      router.push(`/tv?q=${encodeURIComponent(q)}`);
+      return;
+    }
     const id = ++requestId.current;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     const timer = window.setTimeout(() => controller.abort(), 12000);
     setLoading(true);
-    setExtra([]);
-    setExtraNote("");
     setStatus("");
     try {
-      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}`, {
+      const tabQuery = tab === "anime" ? "&tab=anime" : "";
+      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}${tabQuery}`, {
         signal: controller.signal,
       });
       const data = (await response.json()) as {
@@ -62,54 +94,33 @@ function Search() {
       }
       const primary = data.results || [];
       setItems(primary);
-      setPeople(data.people || []);
+      setPeople(tab === "anime" ? [] : data.people || []);
       setLoading(false);
-      setStatus(primary.length || data.people?.length ? "" : "Aucun résultat sur FrenchStream");
-      setExtraNote("Recherche sur les autres sources…");
+      setStatus(primary.length || data.people?.length ? "" : "Aucun résultat.");
+      if (tab === "anime") return;
       try {
         const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`, {
           signal: AbortSignal.timeout(8000),
         });
-        const moreData = (await more.json()) as { results?: ExtraHit[] };
+        const moreData = (await more.json()) as { results?: Poster[] };
         if (id !== requestId.current) return;
         const seen = new Set(primary.map((item) => item.title.toLowerCase()));
-        setExtra(
-          (moreData.results || []).filter((item) => item.title && !seen.has(item.title.toLowerCase())),
-        );
+        const extra = (moreData.results || []).filter((item) => item.title && !seen.has(item.title.toLowerCase()));
+        if (extra.length) {
+          setItems([...primary, ...extra]);
+          setStatus("");
+        }
       } catch {
-        if (id === requestId.current) setExtra([]);
+        /* the first results stay on screen */
       }
     } catch {
       if (id !== requestId.current) return;
       setItems([]);
       setPeople([]);
-      setExtra([]);
       setStatus("Recherche impossible. Réessaie.");
     } finally {
       window.clearTimeout(timer);
-      if (id === requestId.current) {
-        setLoading(false);
-        setExtraNote("");
-      }
-    }
-  }
-
-  async function openExtra(item: ExtraHit) {
-    setExtraNote("Ouverture…");
-    try {
-      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      const data = (await response.json()) as { result?: Poster; error?: string };
-      if (!response.ok || !data.result) {
-        setStatus(data.error || "Pas encore disponible à la lecture");
-        return;
-      }
-      openDetail(data.result);
-    } catch {
-      setStatus("Pas encore disponible à la lecture");
-    } finally {
-      setExtraNote("");
+      if (id === requestId.current) setLoading(false);
     }
   }
 
@@ -123,7 +134,7 @@ function Search() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Titre ou acteur"
+            placeholder={tab === "anime" ? "Un animé" : tab === "live" ? "Une chaîne" : "Un film ou une série"}
             className="h-12 w-full rounded-lg bg-zinc-900 pl-10 pr-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
           />
         </div>
@@ -161,39 +172,13 @@ function Search() {
 
         {!loading && items.length ? (
           <section>
-            <h2 className="mb-4 text-lg font-semibold sm:text-xl">FrenchStream</h2>
             <div className="rise">
-              <PosterGrid items={items} />
+              <PosterGrid items={items} onOpen={openItem} />
             </div>
           </section>
         ) : null}
 
-        {!loading && extra.length ? (
-          <section>
-            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Autres sources</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-              {extra.map((item) => (
-                <button
-                  key={`${item.source}-${item.kind}-${item.title}`}
-                  type="button"
-                  onClick={() => openExtra(item)}
-                  className="text-left"
-                >
-                  <span className="block aspect-[2/3] overflow-hidden rounded-lg bg-zinc-900">
-                    {item.poster ? (
-                      <img src={item.poster} alt="" className="h-full w-full object-cover" />
-                    ) : null}
-                  </span>
-                  <span className="mt-2 block truncate text-sm">{item.title}</span>
-                  <span className="text-xs text-zinc-500">{item.source}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {extraNote ? <p className="text-sm text-zinc-400">{extraNote}</p> : null}
-
-        {!loading && !items.length && !people.length && !extra.length ? (
+        {!loading && !items.length && !people.length ? (
           <p className="text-zinc-400">{status}</p>
         ) : null}
       </div>

@@ -116,7 +116,7 @@ function GenreCatalog() {
     <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
       <Link href="/browse" className="text-sm font-medium text-zinc-400 hover:text-white">
-        Accueil
+        Films & Séries
       </Link>
       <h1 className="mt-3 text-3xl font-bold sm:text-4xl">{name}</h1>
 

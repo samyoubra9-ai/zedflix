@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { rememberCatalogTab } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
 
 type Channel = { id: string; name: string; logo: string; url: string };
@@ -24,6 +25,7 @@ export function TvLiveBrowse() {
   }
 
   useEffect(() => {
+    rememberCatalogTab("live");
     let stop = false;
     fetch("/api/watch/live")
       .then(async (response) => {
@@ -88,7 +90,7 @@ export function TvLiveBrowse() {
               <span className="tv-live-dot h-2 w-2 rounded-full bg-[#e50914]" />
               EN DIRECT
             </p>
-            <h1 className="mt-2 text-4xl font-bold tracking-tight xl:text-5xl">TV live</h1>
+            <h1 className="mt-2 text-4xl font-bold tracking-tight xl:text-5xl">TV Live</h1>
             <p className="mt-2 text-base text-zinc-400">
               {loading
                 ? "Chargement des chaînes…"

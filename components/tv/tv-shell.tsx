@@ -6,7 +6,6 @@ import { ReactNode, useState } from "react";
 import { catalogAccessOf, catalogAllowsPath, useSession } from "@/components/account";
 import {
   IconFilm,
-  IconHome,
   IconList,
   IconLive,
   IconLogout,
@@ -18,10 +17,9 @@ import { TvSpatialNav } from "./spatial-nav";
 
 const NAV = [
   { href: "/search", label: "Recherche", Icon: IconSearch },
-  { href: "/browse", label: "Accueil", Icon: IconHome },
-  { href: "/films", label: "Films", Icon: IconFilm },
-  { href: "/series", label: "Séries", Icon: IconTv },
-  { href: "/tv", label: "TV live", Icon: IconLive },
+  { href: "/browse", label: "Films & Séries", Icon: IconFilm },
+  { href: "/anime", label: "Animés", Icon: IconTv },
+  { href: "/tv", label: "TV Live", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
 ] as const;
 

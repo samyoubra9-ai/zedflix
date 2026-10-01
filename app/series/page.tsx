@@ -1,12 +1,12 @@
 "use client";
 
-import { AccountGate } from "@/components/account";
-import { Catalog } from "../films/page";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function SeriesPage() {
-  return (
-    <AccountGate>
-      <Catalog kind="show" title="Séries" />
-    </AccountGate>
-  );
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/browse");
+  }, [router]);
+  return null;
 }

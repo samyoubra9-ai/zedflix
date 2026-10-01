@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { catalogAccessOf, rememberCatalogTab, useSession } from "@/components/account";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
@@ -99,57 +100,32 @@ function TvRow({
 export function TvBrowse() {
   const [hero, setHero] = useState<HeroCard[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
-  const [fresh, setFresh] = useState<Row[]>([]);
   const [index, setIndex] = useState(0);
   const [fade, setFade] = useState(true);
   const [heroReady, setHeroReady] = useState(false);
-  const [rowsReady, setRowsReady] = useState(false);
   const [status, setStatus] = useState("");
   const openDetail = useOpenDetail();
+  const { profile } = useSession();
+  const allowLive = catalogAccessOf(profile) !== "vod";
 
   useEffect(() => {
+    rememberCatalogTab("stream");
     let stop = false;
-    fetch("/api/watch/home?part=fresh")
-      .then(async (response) => {
-        const data = (await response.json()) as { rows?: Row[] };
-        if (!stop && response.ok) setFresh(data.rows || []);
-      })
-      .catch(() => undefined);
-
-    fetch("/api/watch/home?part=spotlight")
+    fetch("/api/watch/home")
       .then(async (response) => {
         const data = (await response.json()) as { hero?: HeroCard[]; rows?: Row[]; error?: string };
         if (stop) return;
-        if (!response.ok) setStatus(data.error || "L’accueil est indisponible");
-        else setHero((data.hero || []).filter((item) => item?.id && item.title && item.title !== "null" && item.backdrop));
-        setHeroReady(true);
-        const rowsResponse = await fetch("/api/watch/home?part=rows");
-        const rowsData = (await rowsResponse.json()) as { rows?: Row[] };
-        if (stop) return;
-        const seen = new Set<string>();
-        if (rowsResponse.ok) {
-          setRows(
-            (rowsData.rows || [])
-              .filter((row) => !/aventure|horreur|comédie|comedie|thriller|science|action|drame/i.test(row.name))
-              .map((row) => ({
-                ...row,
-                items: (row.items || []).filter((item) => {
-                  const key = (item.title || "").toLowerCase().replace(/\s*saison\s*\d+.*/i, "").trim();
-                  if (!item.id || !item.title || item.title === "null" || seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                }),
-              }))
-              .filter((row) => row.items.length > 0),
-          );
+        if (!response.ok) setStatus(data.error || "Catalogue indisponible");
+        else {
+          setHero((data.hero || []).filter((item) => item?.id && item.title && item.title !== "null"));
+          setRows((data.rows || []).filter((row) => row.items?.length));
         }
-        setRowsReady(true);
+        setHeroReady(true);
       })
       .catch(() => {
         if (!stop) {
-          setStatus("L’accueil est indisponible");
+          setStatus("Catalogue indisponible");
           setHeroReady(true);
-          setRowsReady(true);
         }
       });
     return () => {
@@ -241,7 +217,7 @@ export function TvBrowse() {
       ) : null}
 
       <div className={`relative z-10 ${featured ? "-mt-6" : "pt-10"}`}>
-        {heroReady ? (
+        {heroReady && allowLive ? (
           <div className="mb-8 px-10">
             <Link
               href="/tv"
@@ -256,7 +232,7 @@ export function TvBrowse() {
                     <span className="tv-live-dot h-2 w-2 rounded-full bg-white" />
                     EN DIRECT
                   </span>
-                  <span className="mt-2 block text-2xl font-bold">TV live</span>
+                  <span className="mt-2 block text-2xl font-bold">TV Live</span>
                   <span className="mt-1 block text-sm text-white/75">
                     Chaînes françaises · télécommande OK
                   </span>
@@ -275,7 +251,7 @@ export function TvBrowse() {
           </div>
         ) : null}
 
-        {[...flatRows, ...fresh].map((row, rowIndex) => (
+        {flatRows.map((row, rowIndex) => (
           <TvRow
             key={row.name}
             title={row.name}
@@ -284,18 +260,6 @@ export function TvBrowse() {
             first={rowIndex === 0 && !featured}
           />
         ))}
-
-        {rowsReady ? (
-          <div className="px-10 pt-2">
-            <Link
-              href="/films"
-              data-tv-focus
-              className="tv-focus inline-flex rounded-md bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10"
-            >
-              Voir tous les films
-            </Link>
-          </div>
-        ) : null}
 
         {status ? <p className="px-10 pt-6 text-sm text-zinc-300">{status}</p> : null}
       </div>

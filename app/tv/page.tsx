@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { AccountGate, SiteNav } from "@/components/account";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { AccountGate, rememberCatalogTab, SiteNav } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
 import { TvLiveBrowse } from "@/components/tv/tv-live";
 import { useTvMode } from "@/hooks/use-tv-mode";
@@ -20,12 +21,17 @@ export default function TvPage() {
 function TvPageBody() {
   const tv = useTvMode();
   if (tv) return <TvLiveBrowse />;
-  return <MobileLive />;
+  return (
+    <Suspense>
+      <MobileLive />
+    </Suspense>
+  );
 }
 
 function MobileLive() {
+  const params = useSearchParams();
   const [groups, setGroups] = useState<Group[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(params.get("q") || "");
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [activeGroup, setActiveGroup] = useState<string>("all");
@@ -37,6 +43,7 @@ function MobileLive() {
   }
 
   useEffect(() => {
+    rememberCatalogTab("live");
     let stop = false;
     setLoading(true);
     setStatus("");
@@ -94,7 +101,7 @@ function MobileLive() {
             <span className="tv-live-dot h-1.5 w-1.5 rounded-full bg-[#e50914]" />
             DIRECT
           </p>
-          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">TV en direct</h1>
+          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">TV Live</h1>
           <p className="mt-2 text-sm text-zinc-400">
             {loading ? "Chargement des chaînes…" : `${total} chaîne${total > 1 ? "s" : ""}`}
           </p>

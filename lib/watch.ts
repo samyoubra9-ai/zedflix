@@ -63,10 +63,183 @@ let cachedHome: { at: number; value: WatchHome } | null = null;
 
 export async function homeCatalog(): Promise<WatchHome> {
   if (cachedHome && Date.now() - cachedHome.at < 10 * 60 * 1000) return cachedHome.value;
-  const [spotlight, rows] = await Promise.all([curatedSpotlight(), curatedRows()]);
-  const value: WatchHome = { hero: spotlight.hero, rows };
-  if (!value.hero.length && !value.rows.length) throw new Error("L’accueil est indisponible");
+  const value = await streamHome();
+  if (!value.hero.length && !value.rows.length) throw new Error("Catalogue indisponible");
   cachedHome = { at: Date.now(), value };
+  return value;
+}
+
+function absUrl(origin: string, src: string) {
+  if (!src) return "";
+  if (src.startsWith("http")) return src;
+  if (src.startsWith("//")) return `https:${src}`;
+  const base = origin.replace(/\/$/, "");
+  return src.startsWith("/") ? `${base}${src}` : `${base}/${src}`;
+}
+
+function parseShortBlock(block: string, origin: string, kind: WatchResult["kind"]): WatchCard[] {
+  const items: WatchCard[] = [];
+  for (const piece of block.split(/class="short"/).slice(1)) {
+    const title = decodeTitle(piece.match(/class="short-title">([^<]+)/)?.[1] || "");
+    const poster = absUrl(origin, piece.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+    const href =
+      piece.match(/class="[^"]*short-poster[^"]*"[^>]*href="([^"]+)"/)?.[1] ||
+      piece.match(/href="([^"]+)"[^>]*class="[^"]*short-poster[^"]*"/)?.[1] ||
+      "";
+    const modalId = piece.match(/openModal\('(\d+)'\)/)?.[1] || "";
+    const newsId = piece.match(/newsid=(\d+)/)?.[1] || "";
+    const slug = href.split("/").filter(Boolean).pop()?.split("?")[0] || "";
+    const id = modalId || newsId || (/^\d+/.test(slug) ? slug : "") || "";
+    if (!id || !title) continue;
+    items.push({ id, title, poster, overview: "", backdrop: poster, kind });
+  }
+  return uniqueByTitle(items);
+}
+
+/** Provider home: series and films together, in the order the catalog sends them. */
+async function streamHome(): Promise<WatchHome> {
+  const origin = await catalogOrigin();
+  const response = await fetch(`${origin}/`, {
+    headers: headers(origin),
+    cache: "no-store",
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error("Catalogue indisponible");
+  const html = await response.text();
+  const blocks = html.split(/class="pages clearfix"/).slice(1);
+  let films = parseShortBlock(blocks[0] || "", origin, "movie");
+  let series = parseShortBlock(blocks[1] || "", origin, "show");
+  if (!films.length || !series.length) {
+    const [movieList, showList] = await Promise.all([
+      films.length ? Promise.resolve(films) : listCatalog("movie", 1).then((list) => list.items).catch(() => []),
+      series.length ? Promise.resolve(series) : listCatalog("show", 1).then((list) => list.items).catch(() => []),
+    ]);
+    films = films.length ? films : movieList;
+    series = series.length ? series : showList;
+  }
+  const hero: WatchCard[] = [];
+  for (let index = 0; hero.length < 8 && (index < series.length || index < films.length); index += 1) {
+    if (series[index]) hero.push(series[index]);
+    if (hero.length < 8 && films[index]) hero.push(films[index]);
+  }
+  const rows: WatchHomeRow[] = [];
+  if (series.length) rows.push({ name: "Séries", items: series.slice(0, 24) });
+  if (films.length) rows.push({ name: "Films", items: films.slice(0, 24) });
+  return { hero, rows };
+}
+
+function rowTitle(raw: string) {
+  const name = decodeTitle(raw)
+    .replace(/french\s*(stream|manga|anime)|wiflix|vavoo|frembed/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return name || "Animés";
+}
+
+async function mangaRows(): Promise<WatchHomeRow[]> {
+  const origin = "https://w16.french-manga.net";
+  try {
+    const response = await fetch(`${origin}/`, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Cookie: "dle_skin=MGM",
+        Referer: `${origin}/`,
+        "Accept-Language": "fr-FR,fr;q=0.9",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    const rows: WatchHomeRow[] = [];
+    for (const sect of html.split(/class="sect"/).slice(1)) {
+      const name = rowTitle(sect.match(/class="st-left"[^>]*>\s*<a[^>]*>([^<]+)/)?.[1] || "");
+      const items: WatchCard[] = [];
+      for (const card of sect.split(/class="short-in"/).slice(1)) {
+        const title = decodeTitle(card.match(/class="short-title">([^<]+)/)?.[1] || "");
+        const type = decodeTitle(card.match(/mli-type[\s\S]{0,180}?>([^<]+)</)?.[1] || "");
+        const href =
+          card.match(/class="short-poster"[^>]*href="([^"]+)"/)?.[1] ||
+          card.match(/href="([^"]+)"[^>]*class="short-poster"/)?.[1] ||
+          "";
+        const poster = absUrl(origin, card.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+        const id = href.split("=").pop()?.split("&")[0]?.split("#")[0] || "";
+        if (!title || !id) continue;
+        const kind: WatchResult["kind"] = /film/i.test(type) ? "movie" : "show";
+        items.push({ id: `m-${id}`, title, poster, overview: "", backdrop: poster, kind });
+      }
+      const unique = uniqueByTitle(items).slice(0, 24);
+      if (unique.length) rows.push({ name, items: unique });
+    }
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+async function animeSiteRows(): Promise<{ hero: WatchCard[]; rows: WatchHomeRow[] }> {
+  const origin = "https://french-anime.com";
+  try {
+    const response = await fetch(`${origin}/`, {
+      headers: { "User-Agent": USER_AGENT, Referer: `${origin}/`, "Accept-Language": "fr-FR,fr;q=0.9" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return { hero: [], rows: [] };
+    const html = await response.text();
+    const hero: WatchCard[] = [];
+    const carousel = html.match(/owl-carousel[\s\S]{0,20000}?<\/div>\s*<\/div>/)?.[0] || "";
+    for (const item of carousel.split(/class="item"/).slice(1)) {
+      const href = item.match(/<a[^>]+href="([^"]+)"/)?.[1] || "";
+      const title = decodeTitle(item.match(/class="title1"[^>]*>([^<]+)/)?.[1] || "");
+      const poster = absUrl(origin, item.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+      const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+      if (!title || !id) continue;
+      hero.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind: "show" });
+    }
+    const rows: WatchHomeRow[] = [];
+    for (const block of html.split(/class="block-main"/).slice(1)) {
+      const name = rowTitle(block.match(/class="left-ma"[^>]*>([^<]+)/)?.[1] || "Animés");
+      const items: WatchCard[] = [];
+      for (const mov of block.split(/class="mov"/).slice(1)) {
+        const href = mov.match(/class="mov-t"[^>]*href="([^"]+)"/)?.[1] || mov.match(/href="([^"]+)"[^>]*class="mov-t"/)?.[1] || "";
+        const title = decodeTitle(mov.match(/class="mov-t"[^>]*>([^<]+)/)?.[1] || "");
+        const poster = absUrl(origin, mov.match(/class="mov-i"[\s\S]{0,400}?<img[^>]+src="([^"]+)"/)?.[1] || mov.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+        const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+        if (!title || !id) continue;
+        const kind: WatchResult["kind"] = /film/i.test(name) ? "movie" : "show";
+        items.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind });
+      }
+      const unique = uniqueByTitle(items).slice(0, 24);
+      if (unique.length) rows.push({ name, items: unique });
+    }
+    return { hero: uniqueByTitle(hero).slice(0, 8), rows };
+  } catch {
+    return { hero: [], rows: [] };
+  }
+}
+
+let cachedAnime: { at: number; value: WatchHome } | null = null;
+
+/** Both anime catalogs stacked. The first copy of a title wins. */
+export async function animeCatalog(): Promise<WatchHome> {
+  if (cachedAnime && Date.now() - cachedAnime.at < 10 * 60 * 1000) return cachedAnime.value;
+  const [manga, anime] = await Promise.all([mangaRows(), animeSiteRows()]);
+  const seen = new Set<string>();
+  const take = <T extends { title: string }>(items: T[]) =>
+    items.filter((item) => {
+      const key = titleKey(item.title);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const hero = uniqueByTitle([...manga.flatMap((row) => row.items.slice(0, 1)), ...anime.hero]).slice(0, 8);
+  const rows = [...manga, ...anime.rows]
+    .map((row) => ({ ...row, name: rowTitle(row.name), items: take(row.items) }))
+    .filter((row) => row.items.length > 0);
+  const value: WatchHome = { hero, rows };
+  if (!value.hero.length && !value.rows.length) throw new Error("Catalogue indisponible");
+  cachedAnime = { at: Date.now(), value };
   return value;
 }
 
@@ -738,6 +911,86 @@ export async function findPlayable(query: string): Promise<WatchResult | null> {
     }
   }
   return best ? { ...best.item, source: "FrenchStream" } : null;
+}
+
+export async function searchAnimeCatalog(query: string): Promise<WatchResult[]> {
+  const manga = await deadline(8000, (signal) => searchManga(query, signal), []);
+  const seen = new Set(manga.map((item) => titleKey(item.title)));
+  const extra = await deadline(8000, (signal) => searchAnimeSite(query, signal), []);
+  return [...manga, ...extra.filter((item) => !seen.has(titleKey(item.title)))].map((item) => ({
+    id: item.id,
+    title: item.title,
+    poster: item.poster,
+    kind: item.kind,
+  }));
+}
+
+async function searchManga(query: string, signal?: AbortSignal): Promise<WatchResult[]> {
+  try {
+    const origin = "https://w16.french-manga.net";
+    const response = await fetch(`${origin}/engine/ajax/search.php`, {
+      method: "POST",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: `${origin}/`,
+        Cookie: "dle_skin=MGM",
+      },
+      body: new URLSearchParams({ query, page: "1" }),
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    const results: WatchResult[] = [];
+    for (const block of html.split(/class="search-item"/).slice(1)) {
+      const onclick = block.match(/onclick="[^"]*\/([^'"]+)/)?.[1] || "";
+      const title = decodeTitle(block.match(/class="search-title"[^>]*>([^<]+)/)?.[1] || "").replace(/\\'/g, "'");
+      const poster = absUrl(origin, block.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+      const id = onclick.split("/").filter(Boolean).pop()?.split("?")[0] || "";
+      if (!title || !id) continue;
+      const show = /saison|intégrale|integrale/i.test(title);
+      results.push({ id: `m-${id}`, title, poster, kind: show ? "show" : "movie" });
+    }
+    return uniqueByTitle(results);
+  } catch {
+    return [];
+  }
+}
+
+async function searchAnimeSite(query: string, signal?: AbortSignal): Promise<WatchResult[]> {
+  try {
+    const origin = "https://french-anime.com";
+    const response = await fetch(`${origin}/`, {
+      method: "POST",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: `${origin}/`,
+      },
+      body: new URLSearchParams({
+        do: "search",
+        subaction: "search",
+        story: query,
+        search_start: "0",
+        full_search: "0",
+      }),
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    const results: WatchResult[] = [];
+    for (const match of html.matchAll(/<a class="mov-t"[^>]*href="([^"]+)"[^>]*>([^<]+)/g)) {
+      const title = decodeTitle(match[2]);
+      const id = match[1].split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+      if (!title || !id) continue;
+      results.push({ id: `a-${id}`, title, poster: "", kind: /film/i.test(match[1]) ? "movie" : "show" });
+    }
+    return uniqueByTitle(results);
+  } catch {
+    return [];
+  }
 }
 
 export async function searchMore(query: string): Promise<WatchResult[]> {

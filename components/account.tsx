@@ -6,7 +6,6 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { DetailRoot } from "./detail";
 import {
   IconFilm,
-  IconHome,
   IconList,
   IconLive,
   IconLogout,
@@ -39,6 +38,26 @@ export function catalogAccessOf(profile: { catalogAccess?: string } | null | und
 
 export function catalogHome(access: CatalogAccess) {
   return access === "live" ? "/tv" : "/browse";
+}
+
+export type CatalogTab = "stream" | "anime" | "live";
+
+export function rememberCatalogTab(tab: CatalogTab) {
+  try {
+    sessionStorage.setItem("minuit_catalog", tab);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function currentCatalogTab(): CatalogTab {
+  try {
+    const value = sessionStorage.getItem("minuit_catalog");
+    if (value === "anime" || value === "live" || value === "stream") return value;
+  } catch {
+    /* private mode */
+  }
+  return "stream";
 }
 
 export function catalogAllowsPath(pathname: string, access: CatalogAccess) {
@@ -278,10 +297,9 @@ export function AccountGate({
 }
 
 const LINKS = [
-  { href: "/browse", label: "Accueil", Icon: IconHome },
-  { href: "/films", label: "Films", Icon: IconFilm },
-  { href: "/series", label: "Séries", Icon: IconTv },
-  { href: "/tv", label: "TV", Icon: IconLive },
+  { href: "/browse", label: "Films & Séries", Icon: IconFilm },
+  { href: "/anime", label: "Animés", Icon: IconTv },
+  { href: "/tv", label: "TV Live", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
   { href: "/search", label: "Recherche", Icon: IconSearch },
 ] as const;

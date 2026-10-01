@@ -16,9 +16,11 @@ export type Poster = {
 export function PosterCard({
   item,
   autofocus = false,
+  onOpen,
 }: {
   item: Poster;
   autofocus?: boolean;
+  onOpen?: (item: Poster) => void;
 }) {
   const open = useOpenDetail();
   const tv = useTvMode();
@@ -34,7 +36,7 @@ export function PosterCard({
       <button
         ref={ref}
         type="button"
-        onClick={() => open(item)}
+        onClick={() => (onOpen ? onOpen(item) : open(item))}
         data-tv-focus
         {...(autofocus ? { "data-tv-autofocus": true } : {})}
         className="tv-focus relative block w-full touch-manipulation rounded-lg text-left outline-none"
@@ -94,7 +96,13 @@ export function PosterCard({
   );
 }
 
-export function PosterRow({ items }: { items: Poster[] }) {
+export function PosterRow({
+  items,
+  onOpen,
+}: {
+  items: Poster[];
+  onOpen?: (item: Poster) => void;
+}) {
   const scroller = useRef<HTMLDivElement>(null);
   const tv = useTvMode();
 
@@ -125,7 +133,7 @@ export function PosterRow({ items }: { items: Poster[] }) {
             key={`${item.kind}-${item.id}-${item.title}`}
             className="w-[38vw] max-w-[11rem] min-w-[7.5rem] shrink-0 snap-start sm:w-40 sm:max-w-none sm:min-w-0"
           >
-            <PosterCard item={item} autofocus={tv && index === 0} />
+            <PosterCard item={item} autofocus={tv && index === 0} onOpen={onOpen} />
           </div>
         ))}
       </div>
@@ -143,7 +151,13 @@ export function PosterRow({ items }: { items: Poster[] }) {
   );
 }
 
-export function PosterGrid({ items }: { items: Poster[] }) {
+export function PosterGrid({
+  items,
+  onOpen,
+}: {
+  items: Poster[];
+  onOpen?: (item: Poster) => void;
+}) {
   const tv = useTvMode();
   return (
     <div
@@ -157,6 +171,7 @@ export function PosterGrid({ items }: { items: Poster[] }) {
           key={`${item.kind}-${item.id}-${item.title}`}
           item={item}
           autofocus={tv && index === 0}
+          onOpen={onOpen}
         />
       ))}
     </div>
