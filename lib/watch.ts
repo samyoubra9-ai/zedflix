@@ -19,9 +19,11 @@ export async function catalogOrigin() {
     return cachedOrigin.value;
   }
   try {
-    const html = await fetch(PORTAL, { headers: { "User-Agent": USER_AGENT }, cache: "no-store" }).then((response) =>
-      response.text(),
-    );
+    const html = await fetch(PORTAL, {
+      headers: { "User-Agent": USER_AGENT },
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    }).then((response) => response.text());
     const match = html.match(/href="(https:\/\/fs\d+\.lol)\/?"/);
     const value = match?.[1] || FALLBACK_ORIGIN;
     cachedOrigin = { value, at: Date.now() };
@@ -204,10 +206,23 @@ async function searchTitles(query: string): Promise<WatchResult[]> {
   return paceSearch(() => searchTitlesNow(query));
 }
 
-async function searchTitlesNow(query: string): Promise<WatchResult[]> {
+async function deadline<T>(ms: number, run: (signal: AbortSignal) => Promise<T>, fallback: T): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await run(controller.signal);
+  } catch {
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function searchTitlesNow(query: string, signal?: AbortSignal, attempts = 4): Promise<WatchResult[]> {
   const origin = await catalogOrigin();
   let response: Response | null = null;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  const tries = Math.max(1, attempts);
+  for (let attempt = 0; attempt < tries; attempt += 1) {
     response = await fetch(`${origin}/engine/ajax/search.php`, {
       method: "POST",
       headers: {
@@ -216,8 +231,10 @@ async function searchTitlesNow(query: string): Promise<WatchResult[]> {
       },
       body: new URLSearchParams({ query, page: "1" }),
       cache: "no-store",
+      signal,
     });
     if (response.status !== 429 && response.status !== 503) break;
+    if (attempt === tries - 1) break;
     await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
   }
   if (!response?.ok) throw new Error("Recherche impossible");
@@ -640,13 +657,13 @@ export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promi
   };
 }
 
-export async function peopleCatalog(id: string, page = 1) {
+export async function peopleCatalog(id: string, page = 1, signal?: AbortSignal) {
   const origin = await catalogOrigin();
   const safePage = Math.max(1, Math.min(40, Math.floor(page) || 1));
   const slug = id.trim().replace(/\s+/g, "+");
   if (!slug) throw new Error("Acteur introuvable");
   const path = `/xfsearch/actors/${encodeURIComponent(slug).replace(/%2B/gi, "+")}/page/${safePage}`;
-  const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
+  const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store", signal });
   if (response.status === 404) {
     return {
       id: slug,
@@ -682,30 +699,34 @@ export async function searchCatalog(query: string): Promise<{
   results: WatchResult[];
   people: { id: string; name: string; count: number }[];
 }> {
-  const results = (await searchTitles(query)).map((item) => ({ ...item, source: "FrenchStream" }));
+  const started = Date.now();
+  const results = (
+    await deadline(8000, (signal) => searchTitlesNow(query, signal, 2), [])
+  ).map((item) => ({ ...item, source: "FrenchStream" }));
 
-  // Also try actor filmography lookup (same path as the Android app).
-  const people: { id: string; name: string; count: number }[] = [];
-  try {
-    const actor = await peopleCatalog(query, 1);
-    if (actor.items.length) {
-      people.push({
-        id: actor.id,
-        name: actor.name,
-        count: actor.items.length,
-      });
-    }
-  } catch {
-    // ignore actor miss
-  }
+  const left = Math.max(0, 8000 - (Date.now() - started));
+  const people =
+    left >= 400
+      ? await deadline(Math.min(1500, left), (signal) => lookupPeople(query, signal), [])
+      : [];
 
   return { results, people };
+}
+
+async function lookupPeople(query: string, signal: AbortSignal) {
+  try {
+    const actor = await peopleCatalog(query, 1, signal);
+    if (!actor.items.length) return [];
+    return [{ id: actor.id, name: actor.name, count: actor.items.length }];
+  } catch {
+    return [];
+  }
 }
 
 export async function findPlayable(query: string): Promise<WatchResult | null> {
   const wanted = foldName(query);
   if (!wanted) return null;
-  const results = await searchTitles(query);
+  const results = await deadline(8000, (signal) => searchTitlesNow(query, signal, 2), []);
   let best: { item: WatchResult; score: number } | null = null;
   for (const item of results) {
     const left = foldName(item.title);
@@ -720,15 +741,18 @@ export async function findPlayable(query: string): Promise<WatchResult | null> {
 }
 
 export async function searchMore(query: string): Promise<WatchResult[]> {
-  const [frembed, wiflix] = await Promise.all([searchFrembed(query), searchWiflix(query)]);
+  const [frembed, wiflix] = await Promise.all([
+    deadline(6000, (signal) => searchFrembed(query, signal), []),
+    deadline(6000, (signal) => searchWiflix(query, signal), []),
+  ]);
   return uniqueByTitle([...wiflix, ...frembed]).slice(0, 24);
 }
 
-async function searchFrembed(query: string): Promise<WatchResult[]> {
+async function searchFrembed(query: string, signal?: AbortSignal): Promise<WatchResult[]> {
   try {
     const response = await fetch(
       `https://frembed.casa/api/public/search?page=1&query=${encodeURIComponent(query)}`,
-      { headers: { "User-Agent": "Mozilla" }, cache: "no-store" },
+      { headers: { "User-Agent": "Mozilla" }, cache: "no-store", signal },
     );
     if (!response.ok) return [];
     const data = (await response.json()) as {
@@ -746,7 +770,7 @@ async function searchFrembed(query: string): Promise<WatchResult[]> {
   }
 }
 
-async function searchWiflix(query: string): Promise<WatchResult[]> {
+async function searchWiflix(query: string, signal?: AbortSignal): Promise<WatchResult[]> {
   try {
     const origin = "https://flemmix.style";
     const response = await fetch(`${origin}/index.php?do=search`, {
@@ -764,6 +788,7 @@ async function searchWiflix(query: string): Promise<WatchResult[]> {
         full_search: "0",
       }),
       cache: "no-store",
+      signal,
     });
     if (!response.ok) return [];
     const html = await response.text();

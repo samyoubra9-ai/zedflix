@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
 import { IconSearch } from "@/components/icons";
 import { GridSkeleton } from "@/components/loading";
@@ -28,52 +28,89 @@ function Search() {
   const [extraNote, setExtraNote] = useState("");
   const [status, setStatus] = useState("Cherche un film, une série ou un acteur.");
   const openDetail = useOpenDetail();
+  const requestId = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (query.trim().length < 2) return;
     const q = query.trim();
+    const id = ++requestId.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timer = window.setTimeout(() => controller.abort(), 12000);
     setLoading(true);
     setExtra([]);
     setExtraNote("");
     setStatus("");
-    const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}`);
-    const data = (await response.json()) as {
-      results?: Poster[];
-      people?: PersonHit[];
-      error?: string;
-    };
-    setLoading(false);
-    if (!response.ok) {
+    try {
+      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}`, {
+        signal: controller.signal,
+      });
+      const data = (await response.json()) as {
+        results?: Poster[];
+        people?: PersonHit[];
+        error?: string;
+      };
+      if (id !== requestId.current) return;
+      if (!response.ok) {
+        setItems([]);
+        setPeople([]);
+        setStatus(data.error || "Recherche impossible. Réessaie.");
+        return;
+      }
+      const primary = data.results || [];
+      setItems(primary);
+      setPeople(data.people || []);
+      setLoading(false);
+      setStatus(primary.length || data.people?.length ? "" : "Aucun résultat sur FrenchStream");
+      setExtraNote("Recherche sur les autres sources…");
+      try {
+        const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        const moreData = (await more.json()) as { results?: ExtraHit[] };
+        if (id !== requestId.current) return;
+        const seen = new Set(primary.map((item) => item.title.toLowerCase()));
+        setExtra(
+          (moreData.results || []).filter((item) => item.title && !seen.has(item.title.toLowerCase())),
+        );
+      } catch {
+        if (id === requestId.current) setExtra([]);
+      }
+    } catch {
+      if (id !== requestId.current) return;
       setItems([]);
       setPeople([]);
-      setStatus(data.error || "Recherche impossible");
-      return;
+      setExtra([]);
+      setStatus("Recherche impossible. Réessaie.");
+    } finally {
+      window.clearTimeout(timer);
+      if (id === requestId.current) {
+        setLoading(false);
+        setExtraNote("");
+      }
     }
-    const primary = data.results || [];
-    setItems(primary);
-    setPeople(data.people || []);
-    setStatus(primary.length || data.people?.length ? "" : "Aucun résultat sur FrenchStream");
-    setExtraNote("Recherche sur les autres sources…");
-    const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`);
-    const moreData = (await more.json()) as { results?: ExtraHit[] };
-    const seen = new Set(primary.map((item) => item.title.toLowerCase()));
-    setExtra(
-      (moreData.results || []).filter((item) => item.title && !seen.has(item.title.toLowerCase())),
-    );
-    setExtraNote("");
   }
 
   async function openExtra(item: ExtraHit) {
     setExtraNote("Ouverture…");
-    const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`);
-    const data = (await response.json()) as { result?: Poster; error?: string };
-    setExtraNote("");
-    if (!response.ok || !data.result) {
-      setStatus(data.error || "Pas encore disponible à la lecture");
-      return;
+    try {
+      const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await response.json()) as { result?: Poster; error?: string };
+      if (!response.ok || !data.result) {
+        setStatus(data.error || "Pas encore disponible à la lecture");
+        return;
+      }
+      openDetail(data.result);
+    } catch {
+      setStatus("Pas encore disponible à la lecture");
+    } finally {
+      setExtraNote("");
     }
-    openDetail(data.result);
   }
 
   return (
