@@ -23,6 +23,9 @@ export const REMEMBER_COOKIE = "minuit_remember";
 
 type SessionTokens = { accessToken: string; refreshToken: string; email: string };
 
+const CHUNK = 3200;
+const refreshInflight = new Map<string, Promise<SessionTokens>>();
+
 function cookieBase() {
   return {
     httpOnly: true,
@@ -30,6 +33,47 @@ function cookieBase() {
     secure: process.env.NODE_ENV === "production",
     path: "/",
   };
+}
+
+function readToken(request: NextRequest, name: string) {
+  const first = request.cookies.get(name)?.value || "";
+  if (!first) return "";
+  let token = first;
+  for (let index = 1; index < 8; index += 1) {
+    const part = request.cookies.get(`${name}_${index}`)?.value || "";
+    if (!part) break;
+    token += part;
+  }
+  return token;
+}
+
+function writeToken(
+  response: NextResponse,
+  name: string,
+  value: string,
+  options: ReturnType<typeof cookieBase> & { maxAge?: number },
+) {
+  const parts = value.match(new RegExp(`.{1,${CHUNK}}`, "g")) || [];
+  for (let index = 0; index < 8; index += 1) {
+    const cookieName = index === 0 ? name : `${name}_${index}`;
+    const part = parts[index];
+    if (part) response.cookies.set(cookieName, part, options);
+    else response.cookies.set(cookieName, "", { ...cookieBase(), maxAge: 0 });
+  }
+}
+
+async function refreshOnce(refreshToken: string) {
+  const pending = refreshInflight.get(refreshToken);
+  if (pending) return pending;
+  const job = refreshWeb(refreshToken).catch((error) => {
+    refreshInflight.delete(refreshToken);
+    throw error;
+  });
+  refreshInflight.set(refreshToken, job);
+  void job.then(() => {
+    setTimeout(() => refreshInflight.delete(refreshToken), 8000);
+  });
+  return job;
 }
 
 export function writeSession(
@@ -41,11 +85,11 @@ export function writeSession(
     options?.remember ??
     false;
   if (remember) {
-    response.cookies.set(ACCESS_COOKIE, session.accessToken, {
+    writeToken(response, ACCESS_COOKIE, session.accessToken, {
       ...cookieBase(),
       maxAge: 60 * 60 * 24 * 7,
     });
-    response.cookies.set(REFRESH_COOKIE, session.refreshToken, {
+    writeToken(response, REFRESH_COOKIE, session.refreshToken, {
       ...cookieBase(),
       maxAge: 60 * 60 * 24 * 90,
     });
@@ -54,8 +98,8 @@ export function writeSession(
       maxAge: 60 * 60 * 24 * 90,
     });
   } else {
-    response.cookies.set(ACCESS_COOKIE, session.accessToken, cookieBase());
-    response.cookies.set(REFRESH_COOKIE, session.refreshToken, {
+    writeToken(response, ACCESS_COOKIE, session.accessToken, cookieBase());
+    writeToken(response, REFRESH_COOKIE, session.refreshToken, {
       ...cookieBase(),
       maxAge: 60 * 60 * 24,
     });
@@ -65,8 +109,8 @@ export function writeSession(
 }
 
 export function clearSession(response: NextResponse) {
-  response.cookies.set(ACCESS_COOKIE, "", { ...cookieBase(), maxAge: 0 });
-  response.cookies.set(REFRESH_COOKIE, "", { ...cookieBase(), maxAge: 0 });
+  writeToken(response, ACCESS_COOKIE, "", cookieBase());
+  writeToken(response, REFRESH_COOKIE, "", cookieBase());
   response.cookies.set(PROFILE_COOKIE, "", { ...cookieBase(), maxAge: 0 });
   response.cookies.set(REMEMBER_COOKIE, "", { ...cookieBase(), maxAge: 0 });
   return response;
@@ -98,8 +142,10 @@ export function ensureWebDevice(request: NextRequest, response?: NextResponse) {
   return { deviceId, created: true };
 }
 
+const openGates = new WeakMap<NextRequest, Awaited<ReturnType<typeof webAccount>>>();
+
 export async function webAccount(request: NextRequest) {
-  const access = request.cookies.get(ACCESS_COOKIE)?.value || "";
+  const access = readToken(request, ACCESS_COOKIE);
   const remember = request.cookies.get(REMEMBER_COOKIE)?.value === "1";
   try {
     const account = await accountFromAccessToken(access);
@@ -111,9 +157,9 @@ export async function webAccount(request: NextRequest) {
     };
   } catch (error) {
     if (!(error instanceof AccountError)) throw error;
-    const refresh = request.cookies.get(REFRESH_COOKIE)?.value || "";
-    if (!refresh) throw error;
-    const session = await refreshWeb(refresh);
+    const refresh = readToken(request, REFRESH_COOKIE);
+    if (!refresh) throw new AccountError("Connexion requise", 401);
+    const session = await refreshOnce(refresh);
     return {
       email: session.email,
       accessToken: session.accessToken,
@@ -124,8 +170,17 @@ export async function webAccount(request: NextRequest) {
 }
 
 export async function requireWebAccount(request: NextRequest) {
-  const access = request.cookies.get(ACCESS_COOKIE)?.value || "";
-  return accountFromAccessToken(access);
+  const account = await webAccount(request);
+  openGates.set(request, account);
+  return accountFromAccessToken(account.accessToken);
+}
+
+export function seal<T extends NextResponse>(request: NextRequest, response: T) {
+  const account = openGates.get(request);
+  if (!account) return response;
+  if (account.session) writeSession(response, account.session, { remember: account.remember });
+  ensureWebDevice(request, response);
+  return response;
 }
 
 export function currentProfileId(request: NextRequest) {
@@ -134,7 +189,7 @@ export function currentProfileId(request: NextRequest) {
 }
 
 export async function endWebSession(request: NextRequest) {
-  const access = request.cookies.get(ACCESS_COOKIE)?.value || "";
+  const access = readToken(request, ACCESS_COOKIE);
   const device = request.cookies.get(DEVICE_COOKIE)?.value || "";
   await logout(access, device).catch(() => undefined);
 }
@@ -184,7 +239,7 @@ export async function selectWebProfile(
 }
 
 export async function clearWebProfile(request: NextRequest) {
-  const access = request.cookies.get(ACCESS_COOKIE)?.value || "";
+  const access = readToken(request, ACCESS_COOKIE);
   const device = request.cookies.get(DEVICE_COOKIE)?.value || "";
   if (access && device) await releaseSeats(access, device).catch(() => undefined);
   return clearProfile(NextResponse.json({ ok: true }));

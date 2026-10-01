@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
 import { showCatalog } from "@/lib/watch";
-import { requireWebAccount } from "@/lib/web-session";
+import { requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
 
@@ -10,14 +10,14 @@ export async function GET(request: NextRequest) {
     await requireWebAccount(request);
     const id = request.nextUrl.searchParams.get("id")?.trim() || "";
     if (!/^\d+$/.test(id)) {
-      return NextResponse.json({ error: "Série introuvable" }, { status: 400 });
+      return seal(request, NextResponse.json({ error: "Série introuvable" }, { status: 400 }));
     }
-    return NextResponse.json(await showCatalog(id));
+    return seal(request, NextResponse.json(await showCatalog(id)));
   } catch (error) {
     if (error instanceof AccountError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return seal(request, NextResponse.json({ error: error.message }, { status: error.status }));
     }
     const message = error instanceof Error ? error.message : "Série introuvable";
-    return NextResponse.json({ error: message }, { status: 502 });
+    return seal(request, NextResponse.json({ error: message }, { status: 502 }));
   }
 }
