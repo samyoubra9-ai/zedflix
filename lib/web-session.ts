@@ -47,6 +47,10 @@ function readToken(request: NextRequest, name: string) {
   return token;
 }
 
+export function hasWebSession(request: NextRequest) {
+  return Boolean(readToken(request, ACCESS_COOKIE) || readToken(request, REFRESH_COOKIE));
+}
+
 function writeToken(
   response: NextResponse,
   name: string,

@@ -292,10 +292,7 @@ function channelKey(name: string) {
     .replace(/\s+/g, " ");
 }
 
-/**
- * Prefer browser-friendly streams: FHD/HD (usually H.264) over UHD/4K
- * which often decode as audio-only (HEVC) in Chrome.
- */
+/** UHD is often audio-only in Chrome. Otherwise keep the Vavoo feed as-is. */
 function webQualityScore(name: string) {
   const upper = name.toUpperCase();
   if (/\bUHD\b|\b4K\b/.test(upper)) return 1;
@@ -449,19 +446,26 @@ export async function liveCatalog(): Promise<LiveGroup[]> {
   return groups;
 }
 
+function directPlayUrl(id: string) {
+  if (id.startsWith("http://") || id.startsWith("https://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(id);
+    } catch {
+      throw new Error("Chaîne introuvable");
+    }
+    if (parsed.hostname !== "vavoo.to") throw new Error("Chaîne introuvable");
+    return id;
+  }
+  return `${BASE}/vavoo-iptv/play/${id}`;
+}
+
 export async function resolveLiveStream(id: string) {
   const trimmed = id.trim();
   if (!trimmed) throw new Error("Chaîne introuvable");
 
-  let channel = byId.get(trimmed);
-  if (!channel) {
-    await liveCatalog();
-    channel = byId.get(trimmed);
-  }
-
-  const playUrl =
-    channel?.url ||
-    (trimmed.startsWith("http") ? trimmed : `${BASE}/vavoo-iptv/play/${trimmed}`);
+  const channel = byId.get(trimmed);
+  const playUrl = channel?.url || directPlayUrl(trimmed);
 
   const response = await fetch(RESOLVE, {
     method: "POST",

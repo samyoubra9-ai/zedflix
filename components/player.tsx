@@ -57,6 +57,7 @@ export function Player({
   back,
   live = false,
   saver = false,
+  onClose,
 }: {
   id: string;
   episode?: number;
@@ -64,6 +65,7 @@ export function Player({
   live?: boolean;
   /** Prefer the lightest HLS rung (data saver / weak networks). */
   saver?: boolean;
+  onClose?: () => void;
 }) {
   const kind = live ? "movie" : episode ? "show" : "movie";
   const tv = useTvMode();
@@ -101,6 +103,8 @@ export function Player({
   const [allowEnglish, setAllowEnglish] = useState(false);
   const [englishPrompt, setEnglishPrompt] = useState(false);
   const [needsUnmute, setNeedsUnmute] = useState(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const showControls = useCallback((sticky = false) => {
     setControls(true);
@@ -265,20 +269,45 @@ export function Player({
             video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
           }
         } else if (Hls.isSupported()) {
-          hls = new Hls({
-            enableWorker: true,
-            startLevel: -1,
-            capLevelToPlayerSize: !live,
-            maxBufferLength: live ? 20 : 30,
-            maxMaxBufferLength: live ? 40 : 60,
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: 8,
-            liveDurationInfinity: live,
-            highBufferWatchdogPeriod: live ? 1 : 2,
-            maxBufferHole: live ? 1.5 : 0.5,
-            nudgeMaxRetry: live ? 8 : 3,
-            forceKeyFrameOnDiscontinuity: true,
-          });
+          hls = new Hls(
+            live
+              ? {
+                  enableWorker: true,
+                  lowLatencyMode: false,
+                  startLevel: -1,
+                  capLevelToPlayerSize: false,
+                  maxBufferLength: 40,
+                  maxMaxBufferLength: 90,
+                  backBufferLength: 15,
+                  liveSyncDurationCount: 3,
+                  liveMaxLatencyDurationCount: 15,
+                  liveDurationInfinity: true,
+                  maxLiveSyncPlaybackRate: 1,
+                  highBufferWatchdogPeriod: 2,
+                  maxBufferHole: 0.5,
+                  nudgeMaxRetry: 3,
+                  forceKeyFrameOnDiscontinuity: true,
+                  startFragPrefetch: true,
+                  manifestLoadingTimeOut: 8000,
+                  manifestLoadingMaxRetry: 3,
+                  fragLoadingTimeOut: 40000,
+                  fragLoadingMaxRetry: 4,
+                }
+              : {
+                  enableWorker: true,
+                  startLevel: -1,
+                  capLevelToPlayerSize: true,
+                  maxBufferLength: 30,
+                  maxMaxBufferLength: 60,
+                  liveSyncDurationCount: 3,
+                  liveMaxLatencyDurationCount: 8,
+                  liveDurationInfinity: false,
+                  highBufferWatchdogPeriod: 2,
+                  maxBufferHole: 0.5,
+                  nudgeMaxRetry: 3,
+                  forceKeyFrameOnDiscontinuity: true,
+                },
+          );
           hlsRef.current = hls;
           hls.loadSource(data.src);
           hls.attachMedia(video);
@@ -326,16 +355,7 @@ export function Player({
           });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
           hls.on(Hls.Events.ERROR, (_event, info) => {
-            if (!info.fatal || !hls) {
-              if (live && info.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-                try {
-                  hls?.startLoad();
-                } catch {
-                  // ignore
-                }
-              }
-              return;
-            }
+            if (!info.fatal || !hls) return;
             if (info.type === Hls.ErrorTypes.NETWORK_ERROR) {
               hls.startLoad();
               return;
@@ -363,11 +383,18 @@ export function Player({
         try {
           await video.play();
         } catch {
-          // Browsers block unmuted autoplay after navigation — start muted, ask one OK.
-          video.muted = true;
-          setMuted(true);
-          setNeedsUnmute(true);
-          await video.play().catch(() => undefined);
+          if (live) {
+            video.muted = false;
+            video.volume = 1;
+            setMuted(false);
+            setNeedsUnmute(false);
+            await video.play().catch(() => undefined);
+          } else {
+            video.muted = true;
+            setMuted(true);
+            setNeedsUnmute(true);
+            await video.play().catch(() => undefined);
+          }
         }
       })
       .catch(() => {
@@ -509,7 +536,8 @@ export function Player({
           return;
         }
         event.preventDefault();
-        router.push(back);
+        if (onCloseRef.current) onCloseRef.current();
+        else router.push(back);
         return;
       }
 
@@ -821,7 +849,7 @@ export function Player({
           </div>
         ) : null}
 
-        {needsUnmute && !loading && !status && !englishPrompt ? (
+        {needsUnmute && !live && !loading && !status && !englishPrompt ? (
           <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/50 to-transparent pb-28 sm:items-center sm:pb-0">
             <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
               <p className="text-sm text-zinc-400">Son coupé</p>
@@ -893,16 +921,30 @@ export function Player({
               tv ? "px-8 pt-8" : ""
             }`}
           >
-            <Link
-              href={back}
-              {...(tv ? { "data-tv-focus": true, "data-tv-autofocus": true } : {})}
-              className={`tv-focus tv-player-btn flex items-center justify-center rounded-full bg-black/40 text-white ring-1 ring-white/10 backdrop-blur outline-none ${
-                tv ? "h-14 w-14" : "h-10 w-10"
-              }`}
-              aria-label="Retour"
-            >
-              <IconBack className={tv ? "h-6 w-6" : "h-5 w-5"} />
-            </Link>
+            {onClose ? (
+              <button
+                type="button"
+                onClick={onClose}
+                {...(tv ? { "data-tv-focus": true, "data-tv-autofocus": true } : {})}
+                className={`tv-focus tv-player-btn flex items-center justify-center rounded-full bg-black/40 text-white ring-1 ring-white/10 backdrop-blur outline-none ${
+                  tv ? "h-14 w-14" : "h-10 w-10"
+                }`}
+                aria-label="Retour"
+              >
+                <IconBack className={tv ? "h-6 w-6" : "h-5 w-5"} />
+              </button>
+            ) : (
+              <Link
+                href={back}
+                {...(tv ? { "data-tv-focus": true, "data-tv-autofocus": true } : {})}
+                className={`tv-focus tv-player-btn flex items-center justify-center rounded-full bg-black/40 text-white ring-1 ring-white/10 backdrop-blur outline-none ${
+                  tv ? "h-14 w-14" : "h-10 w-10"
+                }`}
+                aria-label="Retour"
+              >
+                <IconBack className={tv ? "h-6 w-6" : "h-5 w-5"} />
+              </Link>
+            )}
             <div className="min-w-0 flex-1">
               <p className={`truncate font-semibold ${tv ? "text-xl" : "text-sm sm:text-base"}`}>{title}</p>
               <p className="inline-flex items-center gap-2 text-[11px] tracking-[0.18em] text-[#e50914]">

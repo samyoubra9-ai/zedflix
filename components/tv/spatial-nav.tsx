@@ -20,6 +20,7 @@ function rectOf(el: Element): Rect {
 }
 
 function isVisible(el: HTMLElement) {
+  if (el.closest("[data-live-paused]")) return false;
   if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") return false;
   if (el.tabIndex < -1) return false;
   const style = window.getComputedStyle(el);

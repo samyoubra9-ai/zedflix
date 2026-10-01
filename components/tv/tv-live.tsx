@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { armLiveSound, LiveStage } from "@/components/live-stage";
 
 type Channel = { id: string; name: string; logo: string; url: string };
 type Group = { id: string; name: string; channels: Channel[] };
@@ -15,7 +15,13 @@ export function TvLiveBrowse() {
   const [status, setStatus] = useState("");
   const [activeGroup, setActiveGroup] = useState("all");
   const [letter, setLetter] = useState("all");
+  const [channelId, setChannelId] = useState<string | null>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
+
+  function openChannel(id: string) {
+    armLiveSound();
+    setChannelId(id);
+  }
 
   useEffect(() => {
     let stop = false;
@@ -68,7 +74,12 @@ export function TvLiveBrowse() {
   }, [activeGroup, letter]);
 
   return (
-    <main data-tv-zone="content" className="relative min-h-screen bg-[#050505] pb-20 text-white">
+    <>
+    <main
+      data-tv-zone="content"
+      data-live-paused={channelId ? "" : undefined}
+      className="relative min-h-screen bg-[#050505] pb-20 text-white"
+    >
       <header className="relative overflow-hidden px-10 pb-6 pt-10">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(229,9,20,0.22),transparent_55%)]" />
         <div className="relative flex items-end justify-between gap-6">
@@ -85,13 +96,14 @@ export function TvLiveBrowse() {
             </p>
           </div>
           {!loading && flat[0] ? (
-            <Link
-              href={`/watch/live/${encodeURIComponent(flat[0].id)}`}
+            <button
+              type="button"
+              onClick={() => openChannel(flat[0].id)}
               data-tv-focus
               className="tv-focus hidden shrink-0 items-center gap-3 rounded-xl bg-white px-6 py-4 text-base font-semibold text-black outline-none lg:inline-flex"
             >
               Regarder {flat[0].name}
-            </Link>
+            </button>
           ) : null}
         </div>
       </header>
@@ -159,6 +171,7 @@ export function TvLiveBrowse() {
                   key={channel.id}
                   channel={channel}
                   autofocus={groupIndex === 0 && index === 0}
+                  onOpen={() => openChannel(channel.id)}
                 />
               ))}
             </div>
@@ -172,6 +185,8 @@ export function TvLiveBrowse() {
         </p>
       ) : null}
     </main>
+    {channelId ? <LiveStage id={channelId} onClose={() => setChannelId(null)} /> : null}
+    </>
   );
 }
 
@@ -204,17 +219,26 @@ function Chip({
   );
 }
 
-function ChannelTile({ channel, autofocus }: { channel: Channel; autofocus?: boolean }) {
-  const ref = useRef<HTMLAnchorElement>(null);
+function ChannelTile({
+  channel,
+  autofocus,
+  onOpen,
+}: {
+  channel: Channel;
+  autofocus?: boolean;
+  onOpen: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (autofocus) ref.current?.focus({ preventScroll: true });
   }, [autofocus]);
 
   return (
-    <Link
+    <button
       ref={ref}
-      href={`/watch/live/${encodeURIComponent(channel.id)}`}
+      type="button"
+      onClick={onOpen}
       data-tv-focus
       data-tv-autofocus={autofocus ? true : undefined}
       tabIndex={0}
@@ -235,6 +259,6 @@ function ChannelTile({ channel, autofocus }: { channel: Channel; autofocus?: boo
       <span className="mt-3 line-clamp-2 min-h-[2.5rem] text-sm font-semibold leading-snug text-zinc-100">
         {channel.name}
       </span>
-    </Link>
+    </button>
   );
 }

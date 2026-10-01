@@ -1368,7 +1368,7 @@ export function allowedMediaUrl(value: string) {
   }
 }
 
-export async function fetchMedia(url: string) {
+export async function fetchMedia(url: string, timeoutMs = 25000) {
   let referer = "https://vidzy.org/";
   let origin = "https://vidzy.org";
   try {
@@ -1391,6 +1391,7 @@ export async function fetchMedia(url: string) {
       Accept: "*/*",
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 

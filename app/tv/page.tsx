@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
+import { armLiveSound, LiveStage } from "@/components/live-stage";
 import { TvLiveBrowse } from "@/components/tv/tv-live";
 import { useTvMode } from "@/hooks/use-tv-mode";
 
@@ -29,6 +29,12 @@ function MobileLive() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [activeGroup, setActiveGroup] = useState<string>("all");
+  const [channelId, setChannelId] = useState<string | null>(null);
+
+  function openChannel(id: string) {
+    armLiveSound();
+    setChannelId(id);
+  }
 
   useEffect(() => {
     let stop = false;
@@ -75,7 +81,11 @@ function MobileLive() {
   const total = filtered.reduce((sum, group) => sum + group.channels.length, 0);
 
   return (
-    <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
+    <>
+    <main
+      data-live-paused={channelId ? "" : undefined}
+      className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12"
+    >
       <SiteNav />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -140,9 +150,10 @@ function MobileLive() {
             <h2 className="mb-4 text-lg font-semibold sm:text-xl">{group.name}</h2>
             <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8">
               {group.channels.map((channel) => (
-                <Link
+                <button
                   key={channel.id}
-                  href={`/watch/live/${encodeURIComponent(channel.id)}`}
+                  type="button"
+                  onClick={() => openChannel(channel.id)}
                   className="group rounded-xl bg-white/5 p-2.5 text-center ring-1 ring-white/10 transition hover:bg-white/10 hover:ring-white/25"
                 >
                   <span className="mx-auto flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-950/80 p-2.5">
@@ -160,7 +171,7 @@ function MobileLive() {
                   <span className="mt-2 block line-clamp-2 text-[11px] font-medium leading-snug text-zinc-200 sm:text-xs">
                     {channel.name}
                   </span>
-                </Link>
+                </button>
               ))}
             </div>
           </section>
@@ -173,5 +184,7 @@ function MobileLive() {
         </p>
       ) : null}
     </main>
+    {channelId ? <LiveStage id={channelId} onClose={() => setChannelId(null)} /> : null}
+    </>
   );
 }
