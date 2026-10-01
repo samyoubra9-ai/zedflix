@@ -49,7 +49,11 @@ export function CatalogBoard({
           setReady(true);
           return;
         }
-        setHero((data.hero || []).filter((item) => item?.id && item.title && item.title !== "null"));
+        setHero(
+          (data.hero || []).filter(
+            (item) => item?.id && item.title && item.title !== "null" && (item.poster || item.backdrop),
+          ),
+        );
         setRows((data.rows || []).filter((row) => row.items?.length));
         setReady(true);
       })

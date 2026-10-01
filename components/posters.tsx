@@ -131,7 +131,7 @@ export function PosterRow({
         {items.map((item, index) => (
           <div
             key={`${item.kind}-${item.id}-${item.title}`}
-            className="w-[38vw] max-w-[11rem] min-w-[7.5rem] shrink-0 snap-start sm:w-40 sm:max-w-none sm:min-w-0"
+            className="w-[38vw] max-w-[11rem] min-w-[7.5rem] shrink-0 snap-start sm:w-40 sm:max-w-none sm:min-w-0 xl:w-36"
           >
             <PosterCard item={item} autofocus={tv && index === 0} onOpen={onOpen} />
           </div>

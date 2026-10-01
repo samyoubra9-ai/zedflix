@@ -96,7 +96,33 @@ function parseShortBlock(block: string, origin: string, kind: WatchResult["kind"
   return uniqueByTitle(items);
 }
 
-/** Provider home: series and films together, in the order the catalog sends them. */
+async function catalogPages(kind: WatchResult["kind"], pages: number) {
+  const lists = await Promise.all(
+    Array.from({ length: pages }, (_, index) =>
+      listCatalog(kind, index + 1)
+        .then((list) => list.items)
+        .catch(() => [] as WatchCard[]),
+    ),
+  );
+  return lists.flat();
+}
+
+/** Enough posters to fill a wide screen, then another full row underneath. */
+function wideRows(items: WatchCard[], names: string[]): WatchHomeRow[] {
+  const size = 18;
+  const rows: WatchHomeRow[] = [];
+  for (let index = 0; index < items.length && rows.length < names.length; index += size) {
+    const slice = items.slice(index, index + size);
+    if (slice.length < 10 && rows.length) {
+      rows[rows.length - 1].items = [...rows[rows.length - 1].items, ...slice];
+      break;
+    }
+    rows.push({ name: names[rows.length], items: slice });
+  }
+  return rows;
+}
+
+/** Provider home, then more pages of the same films and series so a wide screen is full. */
 async function streamHome(): Promise<WatchHome> {
   const origin = await catalogOrigin();
   const response = await fetch(`${origin}/`, {
@@ -107,24 +133,27 @@ async function streamHome(): Promise<WatchHome> {
   if (!response.ok) throw new Error("Catalogue indisponible");
   const html = await response.text();
   const blocks = html.split(/class="pages clearfix"/).slice(1);
-  let films = parseShortBlock(blocks[0] || "", origin, "movie");
-  let series = parseShortBlock(blocks[1] || "", origin, "show");
-  if (!films.length || !series.length) {
-    const [movieList, showList] = await Promise.all([
-      films.length ? Promise.resolve(films) : listCatalog("movie", 1).then((list) => list.items).catch(() => []),
-      series.length ? Promise.resolve(series) : listCatalog("show", 1).then((list) => list.items).catch(() => []),
-    ]);
-    films = films.length ? films : movieList;
-    series = series.length ? series : showList;
-  }
+  const [homeFilms, homeSeries, moreFilms, moreSeries] = await Promise.all([
+    Promise.resolve(parseShortBlock(blocks[0] || "", origin, "movie")),
+    Promise.resolve(parseShortBlock(blocks[1] || "", origin, "show")),
+    catalogPages("movie", 4),
+    catalogPages("show", 4),
+  ]);
+  const films = uniqueByTitle([...homeFilms, ...moreFilms]).slice(0, 54);
+  const series = uniqueByTitle([...homeSeries, ...moreSeries]).slice(0, 54);
   const hero: WatchCard[] = [];
   for (let index = 0; hero.length < 8 && (index < series.length || index < films.length); index += 1) {
     if (series[index]) hero.push(series[index]);
     if (hero.length < 8 && films[index]) hero.push(films[index]);
   }
+  const seriesRows = wideRows(series, ["Séries", "Plus de séries", "Autres séries"]);
+  const filmRows = wideRows(films, ["Films", "Plus de films", "Autres films"]);
   const rows: WatchHomeRow[] = [];
-  if (series.length) rows.push({ name: "Séries", items: series.slice(0, 24) });
-  if (films.length) rows.push({ name: "Films", items: films.slice(0, 24) });
+  const span = Math.max(seriesRows.length, filmRows.length);
+  for (let index = 0; index < span; index += 1) {
+    if (seriesRows[index]) rows.push(seriesRows[index]);
+    if (filmRows[index]) rows.push(filmRows[index]);
+  }
   return { hero, rows };
 }
 
@@ -134,6 +163,18 @@ function rowTitle(raw: string) {
     .replace(/\s+/g, " ")
     .trim();
   return name || "Animés";
+}
+
+function posterSrc(block: string) {
+  return (
+    block.match(/<img[^>]+src="([^"]+)"/i)?.[1] ||
+    block.match(/<img[^>]+data-src="([^"]+)"/i)?.[1] ||
+    ""
+  );
+}
+
+function visibleTitle(raw: string) {
+  return rowTitle(raw).replace(/\bwiflix\b/gi, "").replace(/\s+/g, " ").trim();
 }
 
 async function mangaRows(): Promise<WatchHomeRow[]> {
@@ -147,28 +188,25 @@ async function mangaRows(): Promise<WatchHomeRow[]> {
         "Accept-Language": "fr-FR,fr;q=0.9",
       },
       cache: "no-store",
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) return [];
     const html = await response.text();
     const rows: WatchHomeRow[] = [];
-    for (const sect of html.split(/class="sect"/).slice(1)) {
-      const name = rowTitle(sect.match(/class="st-left"[^>]*>\s*<a[^>]*>([^<]+)/)?.[1] || "");
+    for (const sect of html.split(/class="st-left"/).slice(1)) {
+      const name = visibleTitle(sect.match(/class="st-capt"[^>]*>([^<]+)/)?.[1] || "Animés");
       const items: WatchCard[] = [];
-      for (const card of sect.split(/class="short-in"/).slice(1)) {
-        const title = decodeTitle(card.match(/class="short-title">([^<]+)/)?.[1] || "");
-        const type = decodeTitle(card.match(/mli-type[\s\S]{0,180}?>([^<]+)</)?.[1] || "");
-        const href =
-          card.match(/class="short-poster"[^>]*href="([^"]+)"/)?.[1] ||
-          card.match(/href="([^"]+)"[^>]*class="short-poster"/)?.[1] ||
-          "";
-        const poster = absUrl(origin, card.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
-        const id = href.split("=").pop()?.split("&")[0]?.split("#")[0] || "";
-        if (!title || !id) continue;
-        const kind: WatchResult["kind"] = /film/i.test(type) ? "movie" : "show";
+      for (const card of sect.split(/class="short-in/).slice(1)) {
+        const title = visibleTitle(card.match(/class="short-title"[^>]*>([^<]+)/)?.[1] || "");
+        const type = decodeTitle(card.match(/class="mli-type"[\s\S]{0,240}?>([^<]+)</)?.[1] || "");
+        const href = card.match(/class="short-poster[^"]*"[^>]*href="([^"]+)"/)?.[1] || "";
+        const poster = absUrl(origin, posterSrc(card));
+        const id = href.match(/newsid=(\d+)/)?.[1] || "";
+        if (!title || !id || !poster) continue;
+        const kind: WatchResult["kind"] = /^film$/i.test(type.trim()) ? "movie" : "show";
         items.push({ id: `m-${id}`, title, poster, overview: "", backdrop: poster, kind });
       }
-      const unique = uniqueByTitle(items).slice(0, 24);
+      const unique = uniqueByTitle(items).slice(0, 36);
       if (unique.length) rows.push({ name, items: unique });
     }
     return rows;
@@ -183,37 +221,38 @@ async function animeSiteRows(): Promise<{ hero: WatchCard[]; rows: WatchHomeRow[
     const response = await fetch(`${origin}/`, {
       headers: { "User-Agent": USER_AGENT, Referer: `${origin}/`, "Accept-Language": "fr-FR,fr;q=0.9" },
       cache: "no-store",
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) return { hero: [], rows: [] };
     const html = await response.text();
     const hero: WatchCard[] = [];
-    const carousel = html.match(/owl-carousel[\s\S]{0,20000}?<\/div>\s*<\/div>/)?.[0] || "";
-    for (const item of carousel.split(/class="item"/).slice(1)) {
-      const href = item.match(/<a[^>]+href="([^"]+)"/)?.[1] || "";
-      const title = decodeTitle(item.match(/class="title1"[^>]*>([^<]+)/)?.[1] || "");
-      const poster = absUrl(origin, item.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+    for (const item of html.split(/class="item"/).slice(1, 12)) {
+      const href = item.match(/<a[^>]+href="([^"]+\.html)"/)?.[1] || "";
+      const shortTitle = visibleTitle(item.match(/class="title1"[^>]*>([^<]+)/)?.[1] || "");
+      const alt = visibleTitle(item.match(/<img[^>]+alt="([^"]+)"/)?.[1] || "");
+      const title = alt.length > shortTitle.length ? alt : shortTitle;
+      const poster = absUrl(origin, posterSrc(item));
       const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
-      if (!title || !id) continue;
+      if (!title || !id || !poster) continue;
       hero.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind: "show" });
     }
     const rows: WatchHomeRow[] = [];
     for (const block of html.split(/class="block-main"/).slice(1)) {
-      const name = rowTitle(block.match(/class="left-ma"[^>]*>([^<]+)/)?.[1] || "Animés");
+      const name = visibleTitle(block.match(/class="left-ma[^"]*"[^>]*>([^<]+)/)?.[1] || "Animés");
       const items: WatchCard[] = [];
-      for (const mov of block.split(/class="mov"/).slice(1)) {
-        const href = mov.match(/class="mov-t"[^>]*href="([^"]+)"/)?.[1] || mov.match(/href="([^"]+)"[^>]*class="mov-t"/)?.[1] || "";
-        const title = decodeTitle(mov.match(/class="mov-t"[^>]*>([^<]+)/)?.[1] || "");
-        const poster = absUrl(origin, mov.match(/class="mov-i"[\s\S]{0,400}?<img[^>]+src="([^"]+)"/)?.[1] || mov.match(/<img[^>]+src="([^"]+)"/)?.[1] || "");
+      for (const mov of block.split(/class="mov(?:\s|")/).slice(1)) {
+        const href = mov.match(/class="mov-t[^"]*"[^>]*href="([^"]+)"/)?.[1] || "";
+        const title = visibleTitle(mov.match(/class="mov-t[^"]*"[^>]*>([^<]+)/)?.[1] || "");
+        const poster = absUrl(origin, posterSrc(mov));
         const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
-        if (!title || !id) continue;
+        if (!title || !id || !poster) continue;
         const kind: WatchResult["kind"] = /film/i.test(name) ? "movie" : "show";
         items.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind });
       }
-      const unique = uniqueByTitle(items).slice(0, 24);
+      const unique = uniqueByTitle(items).slice(0, 36);
       if (unique.length) rows.push({ name, items: unique });
     }
-    return { hero: uniqueByTitle(hero).slice(0, 8), rows };
+    return { hero: uniqueByTitle(hero).filter((item) => item.poster).slice(0, 8), rows };
   } catch {
     return { hero: [], rows: [] };
   }
@@ -233,7 +272,9 @@ export async function animeCatalog(): Promise<WatchHome> {
       seen.add(key);
       return true;
     });
-  const hero = uniqueByTitle([...manga.flatMap((row) => row.items.slice(0, 1)), ...anime.hero]).slice(0, 8);
+  const hero = uniqueByTitle([...anime.hero, ...manga.flatMap((row) => row.items.slice(0, 1))])
+    .filter((item) => item.poster)
+    .slice(0, 8);
   const rows = [...manga, ...anime.rows]
     .map((row) => ({ ...row, name: rowTitle(row.name), items: take(row.items) }))
     .filter((row) => row.items.length > 0);
