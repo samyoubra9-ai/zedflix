@@ -11,21 +11,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     requireAdmin(request);
     const { id, profileId } = await context.params;
     const body = await readJson(request);
-    if (body.extend === true || body.months != null || body.days != null) {
-      return NextResponse.json(
-        await adminExtendProfile(id, profileId, {
-          months: body.months,
-          days: body.days,
-        }),
-      );
+    if (body.extend === true || body.months) {
+      return NextResponse.json(await adminExtendProfile(id, profileId, Number(body.months)));
     }
-    const profile = await adminUpdateProfile(
-      id,
-      profileId,
-      String(body.name || ""),
-      String(body.pin || ""),
-      body.catalogAccess,
-    );
+    const profile = await adminUpdateProfile(id, profileId, String(body.name || ""), String(body.pin || ""));
     return NextResponse.json(profile);
   } catch (error) {
     return fail(error);

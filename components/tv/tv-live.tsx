@@ -77,7 +77,7 @@ export function TvLiveBrowse() {
               <span className="tv-live-dot h-2 w-2 rounded-full bg-[#e50914]" />
               EN DIRECT
             </p>
-            <h1 className="mt-2 text-4xl font-bold tracking-tight xl:text-5xl">Toutes les chaînes</h1>
+            <h1 className="mt-2 text-4xl font-bold tracking-tight xl:text-5xl">TV live</h1>
             <p className="mt-2 text-base text-zinc-400">
               {loading
                 ? "Chargement des chaînes…"
@@ -102,7 +102,7 @@ export function TvLiveBrowse() {
           className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <Chip
-            label="Toutes les chaînes"
+            label="Toutes"
             active={activeGroup === "all"}
             onClick={() => {
               setActiveGroup("all");

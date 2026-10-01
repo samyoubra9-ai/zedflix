@@ -2,13 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSession } from "@/components/account";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
 import { MyListButton } from "@/components/my-list-button";
 import type { Poster } from "@/components/posters";
-import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
 type Row = { name: string; items: HeroCard[]; seeAll?: string };
@@ -24,7 +22,6 @@ function TvPoster({
 }) {
   const open = useOpenDetail();
   const ref = useRef<HTMLButtonElement>(null);
-  const title = item.title && item.title !== "null" ? item.title : "";
 
   useEffect(() => {
     if (autoFocus) ref.current?.focus();
@@ -51,12 +48,12 @@ function TvPoster({
           />
         ) : (
           <span className="flex h-full items-center justify-center px-2 text-center text-xs text-zinc-500">
-            {title || "Sans titre"}
+            {item.title}
           </span>
         )}
         <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 transition group-focus:opacity-100" />
         <span className="pointer-events-none absolute bottom-2 left-2 right-2 line-clamp-2 text-xs font-semibold opacity-0 transition group-focus:opacity-100">
-          {title}
+          {item.title}
         </span>
       </span>
     </button>
@@ -80,11 +77,7 @@ function TvRow({
       <div className="mb-3 flex items-end justify-between gap-4 px-10">
         <h2 className="min-w-0 flex-1 truncate text-xl font-bold tracking-wide text-white">{title}</h2>
         {seeAll ? (
-          <Link
-            href={seeAll}
-            data-tv-focus
-            className="tv-focus shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300 outline-none ring-1 ring-transparent hover:text-white focus:ring-white/40"
-          >
+          <Link href={seeAll} data-tv-focus className="tv-focus shrink-0 text-sm font-medium text-zinc-300 outline-none">
             Voir tout
           </Link>
         ) : null}
@@ -104,44 +97,59 @@ function TvRow({
 
 /** Leanback-style home matching the Android TV APK feel. */
 export function TvBrowse() {
-  const { profile } = useSession();
-  const allowLive = profile?.catalogAccess !== "vod";
   const [hero, setHero] = useState<HeroCard[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
+  const [fresh, setFresh] = useState<Row[]>([]);
   const [index, setIndex] = useState(0);
   const [fade, setFade] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [heroReady, setHeroReady] = useState(false);
+  const [rowsReady, setRowsReady] = useState(false);
   const [status, setStatus] = useState("");
   const openDetail = useOpenDetail();
 
   useEffect(() => {
     let stop = false;
-    fetch("/api/watch/home")
+    fetch("/api/watch/home?part=fresh")
+      .then(async (response) => {
+        const data = (await response.json()) as { rows?: Row[] };
+        if (!stop && response.ok) setFresh(data.rows || []);
+      })
+      .catch(() => undefined);
+
+    fetch("/api/watch/home?part=spotlight")
       .then(async (response) => {
         const data = (await response.json()) as { hero?: HeroCard[]; rows?: Row[]; error?: string };
         if (stop) return;
-        if (!response.ok) {
-          setStatus(data.error || "L’accueil est indisponible");
-          setLoading(false);
-          return;
+        if (!response.ok) setStatus(data.error || "L’accueil est indisponible");
+        else setHero((data.hero || []).filter((item) => item?.id && item.title && item.title !== "null" && item.backdrop));
+        setHeroReady(true);
+        const rowsResponse = await fetch("/api/watch/home?part=rows");
+        const rowsData = (await rowsResponse.json()) as { rows?: Row[] };
+        if (stop) return;
+        const seen = new Set<string>();
+        if (rowsResponse.ok) {
+          setRows(
+            (rowsData.rows || [])
+              .filter((row) => !/aventure|horreur|comédie|comedie|thriller|science|action|drame/i.test(row.name))
+              .map((row) => ({
+                ...row,
+                items: (row.items || []).filter((item) => {
+                  const key = (item.title || "").toLowerCase().replace(/\s*saison\s*\d+.*/i, "").trim();
+                  if (!item.id || !item.title || item.title === "null" || seen.has(key)) return false;
+                  seen.add(key);
+                  return true;
+                }),
+              }))
+              .filter((row) => row.items.length > 0),
+          );
         }
-        setHero((data.hero || []).filter((item) => item?.id && item?.title && item.title !== "null"));
-        setRows(
-          (data.rows || [])
-            .map((row) => ({
-              ...row,
-              items: (row.items || []).filter(
-                (item) => item?.id && item?.title && item.title !== "null",
-              ),
-            }))
-            .filter((row) => row.items.length > 0),
-        );
-        setLoading(false);
+        setRowsReady(true);
       })
       .catch(() => {
         if (!stop) {
           setStatus("L’accueil est indisponible");
-          setLoading(false);
+          setHeroReady(true);
+          setRowsReady(true);
         }
       });
     return () => {
@@ -166,13 +174,13 @@ export function TvBrowse() {
 
   return (
     <main className="relative min-h-screen bg-[#050505] pb-16 text-white">
-      {loading ? (
+      {!heroReady ? (
         <div className="flex h-[70vh] items-center justify-center">
           <span className="inline-block h-12 w-12 animate-spin rounded-full border-[3px] border-white/10 border-t-[#e50914]" />
         </div>
       ) : null}
 
-      {!loading && featured ? (
+      {heroReady && featured ? (
         <section className="relative h-[72vh] min-h-[28rem] w-full overflow-hidden">
           {hero.map((card, cardIndex) => (
             // eslint-disable-next-line @next/next/no-img-element
@@ -233,7 +241,7 @@ export function TvBrowse() {
       ) : null}
 
       <div className={`relative z-10 ${featured ? "-mt-6" : "pt-10"}`}>
-        {!loading && allowLive ? (
+        {heroReady ? (
           <div className="mb-8 px-10">
             <Link
               href="/tv"
@@ -248,28 +256,26 @@ export function TvBrowse() {
                     <span className="tv-live-dot h-2 w-2 rounded-full bg-white" />
                     EN DIRECT
                   </span>
-                  <span className="mt-2 block text-2xl font-bold">Toutes les chaînes</span>
+                  <span className="mt-2 block text-2xl font-bold">TV live</span>
                   <span className="mt-1 block text-sm text-white/75">
-                    Catalogue FR complet · télécommande OK
+                    Chaînes françaises · télécommande OK
                   </span>
                 </span>
                 <span className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black">
-                  Voir tout
+                  Ouvrir
                 </span>
               </span>
             </Link>
           </div>
         ) : null}
 
-        {!loading ? <LivePreviewRows tv /> : null}
-
-        {!loading ? (
+        {heroReady ? (
           <div className="px-10">
             <ContinueWatching />
           </div>
         ) : null}
 
-        {flatRows.map((row, rowIndex) => (
+        {[...flatRows, ...fresh].map((row, rowIndex) => (
           <TvRow
             key={row.name}
             title={row.name}
@@ -279,21 +285,14 @@ export function TvBrowse() {
           />
         ))}
 
-        {!loading ? (
-          <div className="flex flex-wrap gap-3 px-10 pt-2">
+        {rowsReady ? (
+          <div className="px-10 pt-2">
             <Link
               href="/films"
               data-tv-focus
               className="tv-focus inline-flex rounded-md bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10"
             >
               Voir tous les films
-            </Link>
-            <Link
-              href="/series"
-              data-tv-focus
-              className="tv-focus inline-flex rounded-md bg-white/10 px-5 py-3 text-sm font-semibold outline-none ring-1 ring-white/10"
-            >
-              Voir toutes les séries
             </Link>
           </div>
         ) : null}

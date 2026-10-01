@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
-import { homeCatalog } from "@/lib/watch";
+import { curatedRows, curatedSpotlight, freshCatalog, homeCatalog } from "@/lib/watch";
 import { requireWebAccount } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +8,11 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     await requireWebAccount(request);
+    const part = request.nextUrl.searchParams.get("part");
+    if (part === "shelves") return NextResponse.json({ rows: [] });
+    if (part === "spotlight") return NextResponse.json(await curatedSpotlight());
+    if (part === "rows") return NextResponse.json({ rows: await curatedRows() });
+    if (part === "fresh") return NextResponse.json({ rows: await freshCatalog() });
     return NextResponse.json(await homeCatalog());
   } catch (error) {
     if (error instanceof AccountError) {

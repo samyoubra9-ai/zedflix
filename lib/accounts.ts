@@ -61,54 +61,6 @@ export function expirationDate(months: number) {
   return date.toISOString();
 }
 
-export function expirationFromDays(days: number) {
-  return new Date(Date.now() + days * DAY_MS).toISOString();
-}
-
-/** Add duration from remaining expiry (or from now if expired / missing). */
-function extendExpiresAt(current: string | null, amount: { months?: number; days?: number }) {
-  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
-  if (amount.days && amount.days > 0) {
-    base.setTime(base.getTime() + amount.days * DAY_MS);
-  } else if (amount.months && amount.months > 0) {
-    base.setMonth(base.getMonth() + amount.months);
-  }
-  return base.toISOString();
-}
-
-function parseExtendAmount(input: { months?: unknown; days?: unknown }) {
-  const days = Number(input.days);
-  if (Number.isFinite(days) && days > 0 && days <= 3650) {
-    return { days: Math.floor(days) };
-  }
-  const months = Number(input.months);
-  if (Number.isFinite(months) && DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-    return { months };
-  }
-  throw new AccountError("Durée invalide — indique des jours (ex. 3) ou 1/3/6/12 mois", 400);
-}
-
-function parseCreateDuration(input: { months?: unknown; days?: unknown; trial?: unknown }) {
-  if (input.trial === true) {
-    return { expiresAt: null as string | null, trialUsed: false };
-  }
-  const days = Number(input.days);
-  if (Number.isFinite(days) && days > 0 && days <= 3650) {
-    return { expiresAt: expirationFromDays(Math.floor(days)), trialUsed: true };
-  }
-  const months = Number(input.months);
-  if (Number.isFinite(months) && DURATIONS.includes(months as (typeof DURATIONS)[number])) {
-    return { expiresAt: expirationDate(months), trialUsed: true };
-  }
-  if (
-    (input.months === null || input.months === undefined) &&
-    (input.days === null || input.days === undefined)
-  ) {
-    return { expiresAt: null as string | null, trialUsed: false };
-  }
-  throw new AccountError("Durée invalide — indique des jours ou 1/3/6/12 mois", 400);
-}
-
 function expiresAtOf(metadata: Record<string, unknown> | undefined) {
   const value = metadata?.expires_at;
   return typeof value === "string" ? value : null;
@@ -175,29 +127,6 @@ function validPin(pin: string) {
   return pin === "" || /^\d{4}$/.test(pin);
 }
 
-export type CatalogAccess = "full" | "vod" | "live";
-
-export const CATALOG_ACCESS_OPTIONS: { id: CatalogAccess; label: string }[] = [
-  { id: "full", label: "Films, séries & TV" },
-  { id: "vod", label: "Films & séries seulement" },
-  { id: "live", label: "TV live seulement" },
-];
-
-export function parseCatalogAccess(raw: unknown): CatalogAccess {
-  const value = String(raw || "").trim().toLowerCase();
-  if (value === "vod" || value === "films" || value === "series") return "vod";
-  if (value === "live" || value === "tv") return "live";
-  return "full";
-}
-
-export function catalogAllowsVod(access: CatalogAccess) {
-  return access !== "live";
-}
-
-export function catalogAllowsLive(access: CatalogAccess) {
-  return access !== "vod";
-}
-
 export type StoredProfile = {
   id: string;
   name: string;
@@ -205,7 +134,6 @@ export type StoredProfile = {
   color: number;
   expiresAt: string | null;
   trialUsed: boolean;
-  catalogAccess: CatalogAccess;
 };
 
 export type PublicProfile = {
@@ -219,7 +147,6 @@ export type PublicProfile = {
   daysLeft: number | null;
   warning: "soon" | "urgent" | "expired" | null;
   warningMessage: string | null;
-  catalogAccess: CatalogAccess;
 };
 
 function daysLeftOf(expiresAt: string | null) {
@@ -294,7 +221,6 @@ function publicProfile(profile: StoredProfile): PublicProfile {
     color: profile.color,
     locked: profile.pin.length === 4,
     expiresAt: profile.expiresAt,
-    catalogAccess: profile.catalogAccess,
     ...profileWarning(profile),
   };
 }
@@ -333,7 +259,6 @@ function profilesOf(metadata: Record<string, unknown> | undefined): StoredProfil
           color: Number.isFinite(color) ? color : PROFILE_COLORS[0],
           expiresAt,
           trialUsed,
-          catalogAccess: parseCatalogAccess(profile.catalogAccess),
         },
       ];
     })
@@ -356,16 +281,18 @@ function accountSummary(profiles: StoredProfile[]) {
   };
 }
 
+function extendExpiresAt(current: string | null, months: number) {
+  const base = current && Date.parse(current) > Date.now() ? new Date(current) : new Date();
+  base.setMonth(base.getMonth() + months);
+  return base.toISOString();
+}
+
 function clearProfileSeats(seats: Record<string, ProfileSeat[]>, profileId: string) {
   delete seats[profileId];
   return seats;
 }
 
-export async function createAccount(
-  emailRaw: string,
-  password: string,
-  duration: { months?: unknown; days?: unknown } = { months: 1 },
-) {
+export async function createAccount(emailRaw: string, password: string, months = 1) {
   const email = emailRaw.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AccountError("Email invalide", 400);
@@ -373,9 +300,8 @@ export async function createAccount(
   if (password.length < 8) {
     throw new AccountError("Le mot de passe doit faire au moins 8 caractères", 400);
   }
-  const created = parseCreateDuration(duration);
-  if (!created.expiresAt) {
-    throw new AccountError("Durée du profil Principal requise", 400);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
   }
 
   const main: StoredProfile = {
@@ -383,9 +309,8 @@ export async function createAccount(
     name: "Principal",
     pin: "",
     color: PROFILE_COLORS[0],
-    expiresAt: created.expiresAt,
+    expiresAt: expirationDate(months),
     trialUsed: true,
-    catalogAccess: "full",
   };
 
   const supabase = client();
@@ -408,7 +333,7 @@ export async function createAccount(
     }
     throw new AccountError(error.message, error.status || 400);
   }
-  return { email, expiresAt: created.expiresAt, lifetime: true };
+  return { email, months, lifetime: true };
 }
 
 export async function listAccounts() {
@@ -454,9 +379,11 @@ export async function deleteAccount(id: string) {
   if (error) throw new AccountError(error.message, error.status || 400);
 }
 
-export async function extendAccount(id: string, amount: { months?: unknown; days?: unknown }) {
+export async function extendAccount(id: string, months: number) {
   assertUserId(id);
-  const duration = parseExtendAmount(amount);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
   const supabase = client();
   const { data, error } = await supabase.auth.admin.getUserById(id);
   if (error || !data.user) throw new AccountError("Compte introuvable", 404);
@@ -466,34 +393,27 @@ export async function extendAccount(id: string, amount: { months?: unknown; days
   }
   const profiles = current.map((profile) => ({
     ...profile,
-    expiresAt: extendExpiresAt(profile.expiresAt, duration),
+    expiresAt: extendExpiresAt(profile.expiresAt, months),
     trialUsed: true,
   }));
   await saveProfiles(data.user.id, data.user.app_metadata, profiles, { expires_at: null });
   const summary = accountSummary(profiles);
-  return {
-    email: data.user.email,
-    expiresAt: summary.expiresAt,
-    ...duration,
-    profiles: profiles.map(publicProfile),
-  };
+  return { email: data.user.email, expiresAt: summary.expiresAt, months, profiles: profiles.map(publicProfile) };
 }
 
-export async function adminExtendProfile(
-  userId: string,
-  profileId: string,
-  amount: { months?: unknown; days?: unknown },
-) {
+export async function adminExtendProfile(userId: string, profileId: string, months: number) {
   assertUserId(userId);
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
-  const duration = parseExtendAmount(amount);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
   const user = await accountUser(userId);
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === profileId);
   if (!existing) throw new AccountError("Profil introuvable", 404);
   const profile: StoredProfile = {
     ...existing,
-    expiresAt: extendExpiresAt(existing.expiresAt, duration),
+    expiresAt: extendExpiresAt(existing.expiresAt, months),
     trialUsed: true,
   };
   await saveProfiles(
@@ -1030,8 +950,7 @@ export async function adminCreateProfile(
   userId: string,
   nameRaw: string,
   pin: string,
-  duration: { months?: unknown; days?: unknown; trial?: unknown } = {},
-  catalogAccessRaw: unknown = "full",
+  months: number | null = null,
 ) {
   const name = nameRaw.trim();
   if (!name || !/^\d{4}$/.test(pin)) throw new AccountError("Nom et code à 4 chiffres requis", 400);
@@ -1039,27 +958,29 @@ export async function adminCreateProfile(
   const current = profilesOf(user.app_metadata);
   if (current.length >= MAX_PROFILES) throw new AccountError("5 profils maximum", 400);
 
-  const created = parseCreateDuration(duration);
+  let expiresAt: string | null = null;
+  let trialUsed = false;
+  if (months !== null && months !== undefined) {
+    if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+      throw new AccountError("Durée invalide", 400);
+    }
+    expiresAt = expirationDate(months);
+    trialUsed = true;
+  }
+
   const profile: StoredProfile = {
     id: current.length === 0 ? "main" : crypto.randomUUID().replace(/-/g, ""),
     name: name.slice(0, 18),
     pin,
     color: PROFILE_COLORS[current.length % PROFILE_COLORS.length],
-    expiresAt: created.expiresAt,
-    trialUsed: created.trialUsed,
-    catalogAccess: parseCatalogAccess(catalogAccessRaw),
+    expiresAt,
+    trialUsed,
   };
   await saveProfiles(user.id, user.app_metadata, [...current, profile], { expires_at: null });
   return publicProfile(profile);
 }
 
-export async function adminUpdateProfile(
-  userId: string,
-  id: string,
-  nameRaw: string,
-  pinRaw = "",
-  catalogAccessRaw?: unknown,
-) {
+export async function adminUpdateProfile(userId: string, id: string, nameRaw: string, pinRaw = "") {
   const name = nameRaw.trim();
   const nextPin = pinRaw.trim();
   if (!/^[a-zA-Z0-9]{4,40}$/.test(id) || !name) throw new AccountError("Profil invalide", 400);
@@ -1068,15 +989,7 @@ export async function adminUpdateProfile(
   const current = profilesOf(user.app_metadata);
   const existing = current.find((profile) => profile.id === id);
   if (!existing) throw new AccountError("Profil introuvable", 404);
-  const profile: StoredProfile = {
-    ...existing,
-    name: name.slice(0, 18),
-    pin: nextPin || existing.pin,
-    catalogAccess:
-      catalogAccessRaw === undefined
-        ? existing.catalogAccess
-        : parseCatalogAccess(catalogAccessRaw),
-  };
+  const profile = { ...existing, name: name.slice(0, 18), pin: nextPin || existing.pin };
   await saveProfiles(user.id, user.app_metadata, current.map((item) => (item.id === id ? profile : item)));
   return publicProfile(profile);
 }

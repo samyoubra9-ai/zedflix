@@ -9,6 +9,7 @@ export type WatchResult = {
   title: string;
   poster: string;
   kind: "movie" | "show";
+  source?: string;
 };
 
 let cachedOrigin: { value: string; at: number } | null = null;
@@ -48,7 +49,6 @@ export type WatchCard = WatchResult & {
 export type WatchHomeRow = {
   name: string;
   items: WatchCard[];
-  /** Netflix-style "Voir tout" target, e.g. /films or /series */
   seeAll?: string;
 };
 
@@ -57,232 +57,366 @@ export type WatchHome = {
   rows: WatchHomeRow[];
 };
 
-const HOME_ROW_LIMIT = 24;
-
 let cachedHome: { at: number; value: WatchHome } | null = null;
 
-function cleanDisplayTitle(value: string | null | undefined) {
-  const title = decodeTitle(value || "").trim();
-  if (!title) return "";
-  if (/^(null|undefined|n\/a)$/i.test(title)) return "";
-  return title;
+export async function homeCatalog(): Promise<WatchHome> {
+  if (cachedHome && Date.now() - cachedHome.at < 10 * 60 * 1000) return cachedHome.value;
+  const [spotlight, rows] = await Promise.all([curatedSpotlight(), curatedRows()]);
+  const value: WatchHome = { hero: spotlight.hero, rows };
+  if (!value.hero.length && !value.rows.length) throw new Error("L’accueil est indisponible");
+  cachedHome = { at: Date.now(), value };
+  return value;
 }
 
-function normalizeMatchTitle(value: string) {
-  return cleanDisplayTitle(value)
+const EXTRA_SERIES = [
+  ["Chernobyl"],
+  ["Succession"],
+  ["Sherlock"],
+  ["Lost"],
+  ["Narcos"],
+  ["Suits"],
+  ["The Office"],
+  ["True Detective"],
+  ["The Mandalorian", "Mandalorian"],
+  ["Shogun"],
+  ["The Bear"],
+  ["Fallout"],
+];
+
+const EXTRA_FILMS = [
+  ["Intouchables"],
+  ["Seven"],
+  ["Shutter Island"],
+  ["Loup de Wall Street"],
+  ["Django"],
+];
+
+const CURATED_SERIES = [
+  ["Game of Thrones", "Trône de fer"],
+  ["House of the Dragon"],
+  ["Casa de Papel"],
+  ["Ozark"],
+  ["Breaking Bad"],
+  ["Better Call Saul"],
+  ["Stranger Things"],
+  ["Peaky Blinders"],
+  ["The Boys"],
+  ["The Last of Us"],
+  ["Squid Game"],
+  ["Mercredi", "Wednesday"],
+  ["Lupin"],
+  ["Dark"],
+  ["Vikings"],
+  ["Prison Break"],
+  ["The Witcher", "Witcher"],
+  ["Black Mirror"],
+  ["Friends"],
+  ["Dexter"],
+  ["The Walking Dead"],
+  ["Arcane"],
+  ...EXTRA_SERIES,
+];
+
+const CURATED_FILMS = [
+  ["Matrix"],
+  ["Seigneur des anneaux"],
+  ["Equalizer"],
+  ["Inception"],
+  ["Interstellar"],
+  ["Avatar"],
+  ["Dark Knight"],
+  ["Gladiator"],
+  ["Titanic"],
+  ["Joker"],
+  ["Dune"],
+  ["Top Gun"],
+  ["Oppenheimer"],
+  ["John Wick"],
+  ["Mission Impossible"],
+  ["Fast and Furious", "Fast & Furious"],
+  ["Mad Max"],
+  ["Jason Bourne"],
+  ["Avengers"],
+  ["Spider-Man", "Spider Man"],
+  ["Deadpool"],
+  ["Iron Man"],
+  ["Harry Potter"],
+  ["Pirates des Caraibes", "Pirates des Caraïbes"],
+  ["Jurassic Park"],
+  ["Fight Club"],
+  ["Pulp Fiction"],
+  ["Forrest Gump"],
+  ["Le Parrain", "Parrain"],
+  ...EXTRA_FILMS,
+];
+
+const HERO_PICKS: { series: boolean; aliases: string[] }[] = [
+  { series: true, aliases: CURATED_SERIES[0] },
+  { series: false, aliases: CURATED_FILMS[0] },
+  { series: true, aliases: CURATED_SERIES[4] },
+  { series: false, aliases: CURATED_FILMS[6] },
+  { series: true, aliases: CURATED_SERIES[6] },
+  { series: false, aliases: CURATED_FILMS[3] },
+  { series: true, aliases: CURATED_SERIES[9] },
+  { series: false, aliases: CURATED_FILMS[7] },
+];
+
+const curatedCache = new Map<string, WatchCard | null>();
+const curatedInflight = new Map<string, Promise<WatchCard | null>>();
+
+function foldName(value: string) {
+  return value
     .normalize("NFD")
     .replace(/\p{M}+/gu, "")
     .toLowerCase()
-    .replace(/(saison|season)\s*\d+.*$/i, "")
+    .replace(/\s*[-–:]?\s*saison\s*\d+.*/i, "")
+    .replace(/^(the|le|la|les)\s+/, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
 
-function sanitizeCard(card: WatchCard): WatchCard | null {
-  const title = cleanDisplayTitle(card.title);
-  const id = String(card.id || "").trim();
-  if (!title || !id || id === "null") return null;
-  const poster = card.poster && !/^(null|undefined)$/i.test(card.poster) ? card.poster : "";
-  const backdrop =
-    card.backdrop && !/^(null|undefined)$/i.test(card.backdrop) ? card.backdrop : poster;
+function cleanDisplayTitle(title: string) {
+  return title
+    .replace(/\s*[-–:]\s*saison\s*\d+.*$/i, "")
+    .replace(/\s+saison\s*\d+.*$/i, "")
+    .replace(/\s*\(\d{4}\)\s*$/, "")
+    .trim();
+}
+
+let searchChain: Promise<void> = Promise.resolve();
+let searchAt = 0;
+
+function paceSearch<T>(run: () => Promise<T>) {
+  const job = searchChain.then(async () => {
+    const wait = Math.max(0, 220 - (Date.now() - searchAt));
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    searchAt = Date.now();
+    return run();
+  });
+  searchChain = job.then(
+    () => undefined,
+    () => undefined,
+  );
+  return job;
+}
+
+async function searchTitles(query: string): Promise<WatchResult[]> {
+  return paceSearch(() => searchTitlesNow(query));
+}
+
+async function searchTitlesNow(query: string): Promise<WatchResult[]> {
+  const origin = await catalogOrigin();
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    response = await fetch(`${origin}/engine/ajax/search.php`, {
+      method: "POST",
+      headers: {
+        ...headers(origin),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ query, page: "1" }),
+      cache: "no-store",
+    });
+    if (response.status !== 429 && response.status !== 503) break;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+  if (!response?.ok) throw new Error("Recherche impossible");
+  const html = await response.text();
+  const results: WatchResult[] = [];
+  const pattern =
+    /<div class='search-item' onclick="location\.href='([^']+)'"[\s\S]*?<img src='([^']*)'[\s\S]*?<div class='search-title'>([^<]+)/g;
+  for (const match of html.matchAll(pattern)) {
+    const href = match[1];
+    const title = decodeTitle(match[3]);
+    const id = href.match(/\/(\d+)-/)?.[1];
+    if (!id || !title || title === "null") continue;
+    const rawPoster = match[2];
+    const poster = rawPoster.startsWith("http")
+      ? rawPoster
+      : `${origin}${rawPoster.startsWith("/") ? "" : "/"}${rawPoster}`;
+    const show = /saison/i.test(href) || /saison/i.test(title);
+    results.push({ id, title, poster, kind: show ? "show" : "movie" });
+  }
+  return results;
+}
+
+async function resolveCurated(aliases: string[], series: boolean): Promise<WatchCard | null> {
+  const cacheKey = `${series ? "show" : "movie"}:${aliases.join("|").toLowerCase()}`;
+  if (curatedCache.has(cacheKey)) return curatedCache.get(cacheKey) ?? null;
+  const pending = curatedInflight.get(cacheKey);
+  if (pending) return pending;
+  const job = findCurated(aliases, series).then((card) => {
+    if (card) curatedCache.set(cacheKey, card);
+    curatedInflight.delete(cacheKey);
+    return card;
+  });
+  curatedInflight.set(cacheKey, job);
+  return job;
+}
+
+function sequelPenalty(extra: string) {
+  if (!extra) return 0;
+  if (/\b(2|3|4|5|6|ii|iii|iv|deux|retour|rises|reloaded|revolutions|legacy)\b/.test(extra)) return 80;
+  if (/\b(1|communaute|malediction|begins)\b/.test(extra)) return 12;
+  return 28;
+}
+
+async function findCurated(aliases: string[], series: boolean): Promise<WatchCard | null> {
+  const wanted = aliases.map(foldName).filter(Boolean);
+  let best: { item: WatchResult; score: number; season: number; penalty: number } | null = null;
+  for (const alias of aliases) {
+    try {
+      const results = await searchTitles(alias);
+      for (const item of results) {
+        if (series ? item.kind !== "show" : item.kind !== "movie") continue;
+        const left = foldName(item.title);
+        if (!left) continue;
+        let score = 0;
+        for (const right of wanted) {
+          if (left === right) score = Math.max(score, 100);
+          else if (left.startsWith(`${right} `)) score = Math.max(score, 60);
+        }
+        if (!score) continue;
+        const season = Number(item.title.match(/saison\s*(\d+)/i)?.[1] || 99);
+        const extra = wanted.reduce((rest, right) => (left.startsWith(`${right} `) ? left.slice(right.length).trim() : rest), "");
+        const penalty = sequelPenalty(extra);
+        const better =
+          !best ||
+          score > best.score ||
+          (score === best.score && penalty < best.penalty) ||
+          (score === best.score && penalty === best.penalty && season < best.season) ||
+          (score === best.score && penalty === best.penalty && season === best.season && item.title.length < best.item.title.length);
+        if (better) best = { item, score, season, penalty };
+      }
+      if (best?.score === 100 && best.season <= 1) break;
+    } catch {
+      // next alias
+    }
+  }
+  if (!best) return null;
   return {
-    ...card,
-    id,
-    title,
-    poster,
-    backdrop,
-    overview: cleanDisplayTitle(card.overview) || card.overview || "",
+    id: best.item.id,
+    title: cleanDisplayTitle(best.item.title) || aliases[0],
+    poster: best.item.poster,
+    overview: "",
+    backdrop: "",
+    kind: series ? "show" : "movie",
   };
 }
 
-function sanitizeCards(items: WatchCard[]) {
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      out[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return out;
+}
+
+async function resolveGroups(groups: string[][], series: boolean) {
+  const cards = await mapPool(groups, 6, (aliases) => resolveCurated(aliases, series));
   const seen = new Set<string>();
   const out: WatchCard[] = [];
-  for (const item of items) {
-    const clean = sanitizeCard(item);
-    if (!clean) continue;
-    const key = `${clean.kind}:${clean.id}`;
-    if (seen.has(key)) continue;
+  for (const card of cards) {
+    if (!card?.id || !card.title || card.title === "null") continue;
+    const key = titleKey(card.title);
+    if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(clean);
+    out.push(card);
   }
   return out;
 }
 
-type CuratedQuery = { aliases: string[]; series: boolean };
-
-const CURATED_SERIES: CuratedQuery[] = [
-  { aliases: ["Game of Thrones", "Trone de fer", "Trône de fer"], series: true },
-  { aliases: ["House of the Dragon", "House of Dragon"], series: true },
-  { aliases: ["Casa de Papel", "La Casa de Papel"], series: true },
-  { aliases: ["Ozark"], series: true },
-  { aliases: ["Breaking Bad"], series: true },
-  { aliases: ["Better Call Saul"], series: true },
-  { aliases: ["Stranger Things"], series: true },
-  { aliases: ["Peaky Blinders"], series: true },
-  { aliases: ["The Boys"], series: true },
-  { aliases: ["The Last of Us", "Last of Us"], series: true },
-  { aliases: ["Squid Game"], series: true },
-  { aliases: ["Mercredi", "Wednesday"], series: true },
-  { aliases: ["Lupin"], series: true },
-  { aliases: ["Dark"], series: true },
-  { aliases: ["Vikings"], series: true },
-  { aliases: ["Prison Break"], series: true },
-  { aliases: ["The Witcher", "Witcher"], series: true },
-  { aliases: ["Black Mirror"], series: true },
-  { aliases: ["Friends"], series: true },
-  { aliases: ["Dexter"], series: true },
-  { aliases: ["The Walking Dead", "Walking Dead"], series: true },
-  { aliases: ["Arcane"], series: true },
-];
-
-const CURATED_FILMS: CuratedQuery[] = [
-  { aliases: ["Matrix"], series: false },
-  { aliases: ["Seigneur des anneaux", "Lord of the Rings"], series: false },
-  { aliases: ["Equalizer"], series: false },
-  { aliases: ["Inception"], series: false },
-  { aliases: ["Interstellar"], series: false },
-  { aliases: ["Avatar"], series: false },
-  { aliases: ["Dark Knight", "Chevalier Noir"], series: false },
-  { aliases: ["Gladiator"], series: false },
-  { aliases: ["Titanic"], series: false },
-  { aliases: ["Joker"], series: false },
-  { aliases: ["Dune"], series: false },
-  { aliases: ["Top Gun"], series: false },
-  { aliases: ["Oppenheimer"], series: false },
-  { aliases: ["John Wick"], series: false },
-  { aliases: ["Mission Impossible"], series: false },
-  { aliases: ["Fast Furious", "Fast and Furious"], series: false },
-  { aliases: ["Transporteur"], series: false },
-  { aliases: ["Beekeeper"], series: false },
-  { aliases: ["Mad Max"], series: false },
-  { aliases: ["Jason Bourne"], series: false },
-  { aliases: ["Avengers"], series: false },
-  { aliases: ["Spider-Man", "Spider Man"], series: false },
-  { aliases: ["Deadpool"], series: false },
-  { aliases: ["Iron Man"], series: false },
-  { aliases: ["Harry Potter"], series: false },
-  { aliases: ["Pirates des Caraibes", "Pirates des Caraïbes"], series: false },
-  { aliases: ["Jurassic Park"], series: false },
-  { aliases: ["Fight Club"], series: false },
-  { aliases: ["Pulp Fiction"], series: false },
-  { aliases: ["Forrest Gump"], series: false },
-  { aliases: ["Parrain"], series: false },
-];
-
-const HOME_GENRE_SHELVES = [
-  { id: "action", name: "Films Action" },
-  { id: "aventure", name: "Aventure" },
-  { id: "horreur", name: "Horreur" },
-  { id: "comedie", name: "Comédie" },
-  { id: "thriller", name: "Thriller" },
-  { id: "science-fiction", name: "Science-fiction" },
-  { id: "drame", name: "Drame" },
-  { id: "fantastique", name: "Fantastique" },
-  { id: "crime", name: "Crime" },
-  { id: "romance", name: "Romance" },
-] as const;
-
-function titlesMatch(candidate: string, wanted: string) {
-  const left = normalizeMatchTitle(candidate);
-  const right = normalizeMatchTitle(wanted);
-  return Boolean(left && right && (left === right || left.startsWith(`${right} `)));
-}
-
-async function resolveCuratedQuery(query: CuratedQuery): Promise<WatchCard | null> {
-  for (const alias of query.aliases) {
-    try {
-      const { results } = await searchCatalog(alias);
-      const hit = results.find((item) => {
-        if (query.series && item.kind !== "show") return false;
-        if (!query.series && item.kind !== "movie") return false;
-        return titlesMatch(item.title, alias);
-      });
-      if (!hit) continue;
-      return {
-        id: hit.id,
-        title: cleanDisplayTitle(hit.title),
-        poster: hit.poster,
-        overview: "",
-        backdrop: hit.poster,
-        kind: hit.kind,
-      };
-    } catch {
-      // try next alias
-    }
+async function withPresentation(card: WatchCard): Promise<WatchCard | null> {
+  const key = process.env.TMDB_API_KEY;
+  if (!key) return card.poster ? { ...card, backdrop: card.poster } : null;
+  const type = card.kind === "show" ? "tv" : "movie";
+  try {
+    const response = await fetch(
+      `https://api.themoviedb.org/3/search/${type}?api_key=${key}&language=fr-FR&query=${encodeURIComponent(card.title)}`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      results?: { backdrop_path?: string | null; overview?: string }[];
+    };
+    const hit = data.results?.find((item) => item.backdrop_path);
+    if (!hit?.backdrop_path) return null;
+    return {
+      ...card,
+      backdrop: `https://image.tmdb.org/t/p/w1280${hit.backdrop_path}`,
+      overview: (hit.overview || "").replace(/\s+/g, " ").trim(),
+    };
+  } catch {
+    return null;
   }
-  return null;
 }
 
-async function resolveCuratedRow(queries: CuratedQuery[]) {
-  const cards: WatchCard[] = [];
-  const seen = new Set<string>();
-  // Resolve in small batches to avoid hammering search.
-  for (let i = 0; i < queries.length; i += 4) {
-    const batch = queries.slice(i, i + 4);
-    const found = await Promise.all(batch.map(resolveCuratedQuery));
-    for (const card of found) {
-      if (!card) continue;
-      const key = `${card.kind}:${card.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      cards.push(card);
-    }
+let cachedSpotlight: { at: number; hero: WatchCard[] } | null = null;
+let cachedRows: { at: number; rows: WatchHomeRow[] } | null = null;
+
+export async function curatedSpotlight(): Promise<{ hero: WatchCard[] }> {
+  if (cachedSpotlight && Date.now() - cachedSpotlight.at < 10 * 60 * 1000) return { hero: cachedSpotlight.hero };
+  const found = await mapPool(HERO_PICKS, 4, (pick) => resolveCurated(pick.aliases, pick.series));
+  const presented = await Promise.all(found.map((card) => (card ? withPresentation(card) : Promise.resolve(null))));
+  let hero = presented.filter((card): card is WatchCard => Boolean(card?.backdrop && card.title));
+  if (!hero.length) {
+    hero = found.filter((card): card is WatchCard => Boolean(card?.poster)).map((card) => ({ ...card, backdrop: card.poster }));
   }
-  return sanitizeCards(cards).slice(0, HOME_ROW_LIMIT);
+  hero = hero.slice(0, 8);
+  if (hero.length >= 4) cachedSpotlight = { at: Date.now(), hero };
+  return { hero };
 }
 
-export async function homeCatalog(): Promise<WatchHome> {
-  if (cachedHome && Date.now() - cachedHome.at < 10 * 60 * 1000) return cachedHome.value;
-
-  const [curatedSeries, curatedFilms, genreRows] = await Promise.all([
-    resolveCuratedRow(CURATED_SERIES),
-    resolveCuratedRow(CURATED_FILMS),
-    Promise.all(
-      HOME_GENRE_SHELVES.map(async (shelf) => {
-        try {
-          const catalog = await genreCatalog(shelf.id, 1);
-          return {
-            name: shelf.name,
-            items: sanitizeCards(catalog.items || []).slice(0, HOME_ROW_LIMIT),
-            seeAll: `/genres/${encodeURIComponent(shelf.id)}`,
-          } satisfies WatchHomeRow;
-        } catch {
-          return { name: shelf.name, items: [], seeAll: `/genres/${encodeURIComponent(shelf.id)}` };
-        }
-      }),
-    ),
+export async function curatedRows(): Promise<WatchHomeRow[]> {
+  if (cachedRows && Date.now() - cachedRows.at < 10 * 60 * 1000) return cachedRows.rows;
+  const [series, films] = await Promise.all([
+    resolveGroups(CURATED_SERIES, true),
+    resolveGroups(CURATED_FILMS, false),
   ]);
-
-  if (!curatedSeries.length && !curatedFilms.length && genreRows.every((row) => !row.items.length)) {
-    throw new Error("L’accueil est indisponible");
-  }
-
-  const heroSource = sanitizeCards([
-    ...curatedFilms.slice(0, 5),
-    ...curatedSeries.slice(0, 5),
-  ]).slice(0, 10);
-  const hero = sanitizeCards(await Promise.all(heroSource.map(withBackdrop)));
-
-  const rows: WatchHomeRow[] = [
+  const filmKeys = new Set(films.map((item) => titleKey(item.title)));
+  const rows = [
     {
       name: "Séries incontournables",
-      items: curatedSeries,
-      seeAll: "/series",
+      items: series.filter((item) => !filmKeys.has(titleKey(item.title))),
+      seeAll: "/selection/series",
     },
     {
-      name: "Films cultes",
-      items: curatedFilms,
-      seeAll: "/films",
+      name: "Films incontournables",
+      items: films,
+      seeAll: "/selection/films",
     },
-    ...genreRows,
-  ]
-    .map((row) => ({ ...row, items: sanitizeCards(row.items).slice(0, HOME_ROW_LIMIT) }))
-    .filter((row) => row.items.length > 0);
+  ].filter((row) => row.items.length > 0);
+  const filled = rows.reduce((sum, row) => sum + row.items.length, 0);
+  if (filled >= 24) cachedRows = { at: Date.now(), rows };
+  return rows;
+}
 
-  const value: WatchHome = { hero, rows };
-  cachedHome = { at: Date.now(), value };
-  return value;
+function titleKey(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/\s*[-–:]?\s*saison\s*\d+.*/i, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function uniqueByTitle<T extends { title: string }>(items: T[]) {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    const key = titleKey(item.title);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 function extractVersionBadge(block: string) {
@@ -353,130 +487,67 @@ export async function listCatalog(kind: WatchResult["kind"], page = 1) {
   const response = await fetch(`${origin}${path}`, { headers: headers(origin), cache: "no-store" });
   if (!response.ok) throw new Error("Catalogue indisponible");
   const items = parseListing(await response.text(), kind).filter(hasFrenchVersion);
-  return { items: sanitizeCards(items), page: safePage, hasMore: items.length >= 12 };
+  return { items, page: safePage, hasMore: items.length >= 12 };
 }
 
-const FALLBACK_GENRES: WatchGenre[] = [
-  { id: "action", name: "Action" },
-  { id: "animation", name: "Animation" },
-  { id: "aventure", name: "Aventure" },
-  { id: "comedie", name: "Comédie" },
-  { id: "crime", name: "Crime" },
-  { id: "documentaire", name: "Documentaire" },
-  { id: "drame", name: "Drame" },
-  { id: "fantastique", name: "Fantastique" },
-  { id: "guerre", name: "Guerre" },
-  { id: "historique", name: "Historique" },
-  { id: "horreur", name: "Horreur" },
-  { id: "romance", name: "Romance" },
-  { id: "science-fiction", name: "Science-fiction" },
-  { id: "thriller", name: "Thriller" },
-  { id: "western", name: "Western" },
+const CATALOG_GENRES: { id: string; name: string; films: string; series: string }[] = [
+  { id: "action", name: "Action", films: "/films/actions/", series: "/action-serie-/" },
+  { id: "animation", name: "Animation", films: "/films/animations/", series: "/animation-serie-/" },
+  { id: "aventure", name: "Aventure", films: "/films/aventures/", series: "/aventure-series-/" },
+  { id: "comedie", name: "Comédie", films: "/films/comedies/", series: "/comedie-serie-/" },
+  { id: "crime", name: "Crime", films: "/films/policiers/", series: "/policier-series-/" },
+  { id: "documentaire", name: "Documentaire", films: "/films/documentaires/", series: "/documentaire-serie-/" },
+  { id: "drame", name: "Drame", films: "/films/drames/", series: "/drame-serie-/" },
+  { id: "fantastique", name: "Fantastique", films: "/films/fantastiques/", series: "/fantastique-series-/" },
+  { id: "guerre", name: "Guerre", films: "/films/guerres/", series: "" },
+  { id: "historique", name: "Historique", films: "/films/historiques/", series: "/serie-historiques-/" },
+  { id: "horreur", name: "Horreur", films: "/films/epouvante-horreurs/", series: "/horreur-serie-/" },
+  { id: "romance", name: "Romance", films: "/films/romances/", series: "/romance-series-/" },
+  { id: "science-fiction", name: "Science-fiction", films: "/films/science-fictions/", series: "/science-fiction-series-/" },
+  { id: "thriller", name: "Thriller", films: "/films/thrillers/", series: "/thriller-series-/" },
+  { id: "western", name: "Western", films: "/films/westerns/", series: "/western-series-/" },
 ];
 
-let cachedGenres: { at: number; value: WatchGenre[] } | null = null;
-
 export async function listGenres(): Promise<WatchGenre[]> {
-  if (cachedGenres && Date.now() - cachedGenres.at < 30 * 60 * 1000) return cachedGenres.value;
-  try {
-    const origin = await catalogOrigin();
-    const response = await fetch(`${origin}/`, { headers: headers(origin), cache: "no-store" });
-    if (!response.ok) throw new Error("fail");
-    const html = await response.text();
-    const block =
-      html.match(/class="menu-section"[^>]*>([\s\S]*?)<\/div>/)?.[1] ||
-      html.match(/id="menu-section"[^>]*>([\s\S]*?)<\/div>/)?.[1] ||
-      "";
-    const genres: WatchGenre[] = [];
-    const seen = new Set<string>();
-    for (const match of block.matchAll(/<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/g)) {
-      const href = match[1];
-      const name = decodeTitle(match[2]).trim();
-      if (!name || name.length > 28) continue;
-      const id = href.replace(/\/+$/, "").split("/").pop() || "";
-      if (!id || seen.has(id) || /^(films|s-tv|series|accueil|home)$/i.test(id)) continue;
-      seen.add(id);
-      genres.push({ id, name });
-    }
-    const value = genres.length >= 6 ? genres.slice(0, 24) : FALLBACK_GENRES;
-    cachedGenres = { at: Date.now(), value };
-    return value;
-  } catch {
-    return FALLBACK_GENRES;
-  }
+  return CATALOG_GENRES.map(({ id, name }) => ({ id, name }));
 }
 
-export async function genreCatalog(genreId: string, page = 1) {
+async function loadGenreSide(origin: string, path: string, page: number, kind: WatchResult["kind"]) {
+  if (!path) return [] as WatchCard[];
+  const safePage = Math.max(1, Math.min(40, Math.floor(page) || 1));
+  const url = safePage === 1 ? `${origin}${path}` : `${origin}${path.replace(/\/$/, "")}/page/${safePage}/`;
+  const response = await fetch(url, { headers: headers(origin), cache: "no-store" });
+  if (!response.ok) return [];
+  return uniqueByTitle(parseListing(await response.text(), kind).filter(hasFrenchVersion));
+}
+
+export async function genreCatalog(genreId: string, page = 1, kind: "all" | "movie" | "show" = "all") {
   const id = genreId.trim().replace(/^\/+|\/+$/g, "");
-  if (!/^[a-zA-Z0-9-]{2,60}$/.test(id)) throw new Error("Genre introuvable");
+  const genre = CATALOG_GENRES.find((item) => item.id === id);
+  if (!genre) throw new Error("Genre introuvable");
   const origin = await catalogOrigin();
   const safePage = Math.max(1, Math.min(40, Math.floor(page) || 1));
-  const filmPath = `/film-en-streaming/${encodeURIComponent(id)}/page/${safePage}`;
-  const seriesSlug = seriesGenreSlug(id);
-  const seriesPaths = [
-    `/${encodeURIComponent(seriesSlug)}/page/${safePage}`,
-    `/s-tv/${encodeURIComponent(seriesSlug)}/page/${safePage}`,
-    `/${encodeURIComponent(seriesSlug)}/`,
-  ];
-
-  const [filmsHtml, seriesHtml] = await Promise.all([
-    fetch(`${origin}${filmPath}`, { headers: headers(origin), cache: "no-store" })
-      .then(async (response) => (response.ok ? response.text() : ""))
-      .catch(() => ""),
-    (async () => {
-      for (const path of seriesPaths) {
-        try {
-          const response = await fetch(`${origin}${path}`, {
-            headers: headers(origin),
-            cache: "no-store",
-          });
-          if (response.ok) return await response.text();
-        } catch {
-          // try next path
-        }
-      }
-      return "";
-    })(),
+  const [movies, shows] = await Promise.all([
+    kind === "show" ? Promise.resolve([] as WatchCard[]) : loadGenreSide(origin, genre.films, safePage, "movie"),
+    kind === "movie" ? Promise.resolve([] as WatchCard[]) : loadGenreSide(origin, genre.series, safePage, "show"),
   ]);
-
-  if (!filmsHtml && !seriesHtml) throw new Error("Genre indisponible");
-
-  const films = filmsHtml
-    ? parseListing(filmsHtml, "movie").filter(hasFrenchVersion)
-    : [];
-  const series = seriesHtml
-    ? parseListing(seriesHtml, "show").filter(hasFrenchVersion)
-    : [];
-  const items = interleaveCards(films, series);
-  const genres = await listGenres();
-  const name = genres.find((item) => item.id === id)?.name || id;
   return {
     id,
-    name,
-    items,
+    name: genre.name,
+    movies,
+    shows,
     page: safePage,
-    hasMore: films.length >= 12 || series.length >= 12,
+    movieHasMore: movies.length >= 12,
+    showHasMore: shows.length >= 12,
   };
 }
 
-function seriesGenreSlug(filmSlug: string) {
-  const clean = filmSlug.replace(/^\/+|\/+$/g, "");
-  if (clean.endsWith("-serie-") || clean.endsWith("-serie")) {
-    return clean.endsWith("-serie-") ? clean : `${clean}-`;
-  }
-  return `${clean.replace(/-+$/, "")}-serie-`;
-}
-
-function interleaveCards(films: WatchCard[], series: WatchCard[]) {
-  if (!films.length) return series;
-  if (!series.length) return films;
-  const out: WatchCard[] = [];
-  const max = Math.max(films.length, series.length);
-  for (let i = 0; i < max; i += 1) {
-    if (i < films.length) out.push(films[i]);
-    if (i < series.length) out.push(series[i]);
-  }
-  return out;
+export async function freshCatalog(): Promise<WatchHomeRow[]> {
+  const [films, series] = await Promise.all([listCatalog("movie", 1), listCatalog("show", 1)]);
+  return [
+    { name: "Nouveautés films", items: uniqueByTitle(films.items).slice(0, 16), seeAll: "/films" },
+    { name: "Nouveautés séries", items: uniqueByTitle(series.items).slice(0, 16), seeAll: "/series" },
+  ].filter((row) => row.items.length > 0);
 }
 
 export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
@@ -611,34 +682,7 @@ export async function searchCatalog(query: string): Promise<{
   results: WatchResult[];
   people: { id: string; name: string; count: number }[];
 }> {
-  const origin = await catalogOrigin();
-  const response = await fetch(`${origin}/engine/ajax/search.php`, {
-    method: "POST",
-    headers: {
-      ...headers(origin),
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({ query, page: "1" }),
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error("Recherche impossible");
-  const html = await response.text();
-  const results: WatchResult[] = [];
-  const pattern =
-    /<div class='search-item' onclick="location\.href='([^']+)'"[\s\S]*?<img src='([^']*)'[\s\S]*?<div class='search-title'>([^<]+)/g;
-  for (const match of html.matchAll(pattern)) {
-    const href = match[1];
-    const title = decodeTitle(match[3]);
-    const id = href.match(/\/(\d+)-/)?.[1];
-    if (!id) continue;
-    const show = /saison/i.test(href) || /saison/i.test(title);
-    results.push({
-      id,
-      title,
-      poster: match[2],
-      kind: show ? "show" : "movie",
-    });
-  }
+  const results = (await searchTitles(query)).map((item) => ({ ...item, source: "FrenchStream" }));
 
   // Also try actor filmography lookup (same path as the Android app).
   const people: { id: string; name: string; count: number }[] = [];
@@ -658,6 +702,95 @@ export async function searchCatalog(query: string): Promise<{
   return { results, people };
 }
 
+export async function findPlayable(query: string): Promise<WatchResult | null> {
+  const wanted = foldName(query);
+  if (!wanted) return null;
+  const results = await searchTitles(query);
+  let best: { item: WatchResult; score: number } | null = null;
+  for (const item of results) {
+    const left = foldName(item.title);
+    if (!left) continue;
+    const score = left === wanted ? 100 : left.startsWith(`${wanted} `) ? 60 : 0;
+    if (!score) continue;
+    if (!best || score > best.score || (score === best.score && item.title.length < best.item.title.length)) {
+      best = { item, score };
+    }
+  }
+  return best ? { ...best.item, source: "FrenchStream" } : null;
+}
+
+export async function searchMore(query: string): Promise<WatchResult[]> {
+  const [frembed, wiflix] = await Promise.all([searchFrembed(query), searchWiflix(query)]);
+  return uniqueByTitle([...wiflix, ...frembed]).slice(0, 24);
+}
+
+async function searchFrembed(query: string): Promise<WatchResult[]> {
+  try {
+    const response = await fetch(
+      `https://frembed.casa/api/public/search?page=1&query=${encodeURIComponent(query)}`,
+      { headers: { "User-Agent": "Mozilla" }, cache: "no-store" },
+    );
+    if (!response.ok) return [];
+    const data = (await response.json()) as {
+      movies?: { title_fr?: string; title?: string; poster?: string; media_type?: string }[];
+      tvShows?: { title_fr?: string; title?: string; name?: string; poster?: string; poster_path?: string }[];
+      series?: { title_fr?: string; title?: string; name?: string; poster?: string; poster_path?: string }[];
+    };
+    const movies = (data.movies || []).map((item) => toExternal(item.title_fr || item.title || "", item.poster || "", "movie", "Frembed"));
+    const shows = [...(data.tvShows || []), ...(data.series || [])].map((item) =>
+      toExternal(item.title_fr || item.title || item.name || "", item.poster || item.poster_path || "", "show", "Frembed"),
+    );
+    return [...movies, ...shows].filter((item) => item.title);
+  } catch {
+    return [];
+  }
+}
+
+async function searchWiflix(query: string): Promise<WatchResult[]> {
+  try {
+    const origin = "https://flemmix.style";
+    const response = await fetch(`${origin}/index.php?do=search`, {
+      method: "POST",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: `${origin}/`,
+      },
+      body: new URLSearchParams({
+        story: query,
+        do: "search",
+        subaction: "search",
+        search_start: "1",
+        full_search: "0",
+      }),
+      cache: "no-store",
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    if (/bot shield|acces securise/i.test(html) || !html.includes("mov-t")) return [];
+    const results: WatchResult[] = [];
+    for (const match of html.matchAll(/<a class="mov-t"[^>]*href="([^"]+)"[^>]*>([^<]+)/g)) {
+      const href = match[1];
+      const title = decodeTitle(match[2]);
+      if (!title) continue;
+      const show = /serie/i.test(href);
+      results.push({ id: "", title, poster: "", kind: show ? "show" : "movie", source: "Wiflix" });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+function toExternal(title: string, poster: string, kind: WatchResult["kind"], source: string): WatchResult {
+  const art = poster.startsWith("http")
+    ? poster
+    : poster.startsWith("/")
+      ? `https://image.tmdb.org/t/p/w342${poster}`
+      : "";
+  return { id: "", title: title.trim(), poster: art, kind, source };
+}
+
 export async function showCatalog(id: string) {
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
@@ -675,7 +808,7 @@ function parseListing(html: string, kind: WatchResult["kind"]): Array<WatchCard 
   const section = html.match(/id="dle-content"[\s\S]*$/i)?.[0] || html;
   const items: Array<WatchCard & { version?: string }> = [];
   for (const block of section.split(/class="short"/).slice(1)) {
-    const title = cleanDisplayTitle(block.match(/class="short-title">([^<]+)/)?.[1] || "");
+    const title = decodeTitle(block.match(/class="short-title">([^<]+)/)?.[1] || "");
     const poster = block.match(/<img[^>]+src="([^"]+)"/)?.[1] || "";
     const modalId = block.match(/openModal\('(\d+)'\)/)?.[1] || "";
     const newsId = block.match(/newsid=(\d+)/)?.[1] || "";
@@ -685,21 +818,22 @@ function parseListing(html: string, kind: WatchResult["kind"]): Array<WatchCard 
       "";
     const slug = posterHref.split("/").filter(Boolean).pop()?.split("?")[0] || "";
     const id = modalId || newsId || (/^\d+/.test(slug) ? slug : "") || "";
-    if (!id || !title || id === "index.php" || id === "null") continue;
+    if (!id || !title || id === "index.php") continue;
     const version = extractVersionBadge(block);
     if (!isFrenchVersionBadge(version)) continue;
-    const show =
-      kind === "show" ||
+    const looksSeries =
       /saison/i.test(title) ||
       posterHref.includes("-saison-") ||
       posterHref.includes("/s-tv/");
+    if (kind === "movie" && looksSeries) continue;
+    if (kind === "show" && !looksSeries) continue;
     items.push({
       id,
       title,
       poster,
       overview: "",
       backdrop: poster,
-      kind: show ? "show" : "movie",
+      kind: looksSeries ? "show" : "movie",
       version,
     });
   }

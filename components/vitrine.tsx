@@ -165,7 +165,7 @@ export function Vitrine() {
               Le salon,&nbsp;en VF.
             </h1>
             <p className="vitrine-rise-delay mt-5 max-w-lg text-base leading-relaxed text-zinc-200/90 sm:text-lg">
-              Films, séries et TV live — sur mobile et Android&nbsp;TV. Compte requis.
+              Films et séries en VF — sur mobile et Android&nbsp;TV. Compte requis.
               Essai de 3&nbsp;jours via Telegram · un essai par appareil.
             </p>
             <div className="vitrine-rise-delay-2 mt-9 flex flex-wrap items-center gap-3">
@@ -221,10 +221,6 @@ export function Vitrine() {
               <li className="flex gap-3">
                 <IconTv className="mt-0.5 h-4 w-4 shrink-0 text-[#e50914]" />
                 Interface leanback · navigation D-pad
-              </li>
-              <li className="flex gap-3">
-                <IconLive className="mt-0.5 h-4 w-4 shrink-0 text-[#e50914]" />
-                TV live française intégrée
               </li>
               <li className="flex gap-3">
                 <IconAndroid className="mt-0.5 h-4 w-4 shrink-0 text-[#e50914]" />

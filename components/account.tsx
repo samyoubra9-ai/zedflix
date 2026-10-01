@@ -27,32 +27,8 @@ type ProfileInfo = {
   locked: boolean;
   warningMessage?: string | null;
   daysLeft?: number | null;
-  catalogAccess?: "full" | "vod" | "live";
 };
 type SessionState = { email: string; profile: ProfileInfo | null };
-
-function allowsVod(access?: string | null) {
-  return access !== "live";
-}
-
-function allowsLive(access?: string | null) {
-  return access !== "vod";
-}
-
-function homeForAccess(access?: string | null) {
-  return allowsVod(access) ? "/browse" : "/tv";
-}
-
-function pathAllowed(pathname: string, access?: string | null) {
-  const livePath =
-    pathname === "/tv" || pathname.startsWith("/tv/") || pathname.startsWith("/watch/live");
-  if (!allowsLive(access) && livePath) return false;
-  if (!allowsVod(access)) {
-    if (livePath || pathname === "/account" || pathname.startsWith("/account/")) return true;
-    return false;
-  }
-  return true;
-}
 
 /** null = not checked yet; false = logged out; object = logged in */
 let sessionCache: SessionState | false | null = null;
@@ -146,10 +122,6 @@ export function AccountGate({
     }
     if (!profile) {
       router.replace("/profiles");
-      return;
-    }
-    if (!pathAllowed(pathname, profile.catalogAccess)) {
-      router.replace(homeForAccess(profile.catalogAccess));
     }
   }, [ready, email, profile, pathname, router, expired]);
 
@@ -305,21 +277,7 @@ export function SiteNav() {
     router.replace("/profiles");
   }
 
-  const desktopLinks = LINKS.filter((link) => {
-    if (link.href === "/search") return false;
-    if (link.href === "/tv") return allowsLive(profile?.catalogAccess);
-    if (link.href === "/films" || link.href === "/series" || link.href === "/list" || link.href === "/browse") {
-      return allowsVod(profile?.catalogAccess);
-    }
-    return true;
-  });
-  const mobileLinks = LINKS.filter((link) => {
-    if (link.href === "/tv") return allowsLive(profile?.catalogAccess);
-    if (link.href === "/films" || link.href === "/series" || link.href === "/list" || link.href === "/browse" || link.href === "/search") {
-      return allowsVod(profile?.catalogAccess);
-    }
-    return true;
-  });
+  const desktopLinks = LINKS.filter((link) => link.href !== "/search");
 
   return (
     <>
@@ -331,10 +289,7 @@ export function SiteNav() {
         }`}
       >
         <div className="flex h-14 items-center gap-3 px-4 sm:h-16 sm:gap-6 sm:px-8 md:px-12">
-          <Link
-            href={homeForAccess(profile?.catalogAccess)}
-            className="text-xl font-bold tracking-tight text-red-600 sm:text-2xl"
-          >
+          <Link href="/browse" className="text-xl font-bold tracking-tight text-red-600 sm:text-2xl">
             MINUIT
           </Link>
 
@@ -350,16 +305,14 @@ export function SiteNav() {
                 {label}
               </Link>
             ))}
-            {allowsVod(profile?.catalogAccess) ? (
-              <Link
-                href="/search"
-                className={`text-sm transition ${
-                  linkActive(pathname, "/search") ? "font-semibold text-white" : "text-zinc-400 hover:text-white"
-                }`}
-              >
-                Recherche
-              </Link>
-            ) : null}
+            <Link
+              href="/search"
+              className={`text-sm transition ${
+                linkActive(pathname, "/search") ? "font-semibold text-white" : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              Recherche
+            </Link>
           </nav>
 
           <div className="relative ml-auto" ref={menuRef}>
@@ -437,11 +390,8 @@ export function SiteNav() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-black/95 backdrop-blur-md md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div
-          className="grid h-[3.75rem]"
-          style={{ gridTemplateColumns: `repeat(${Math.max(mobileLinks.length, 1)}, minmax(0, 1fr))` }}
-        >
-          {mobileLinks.map(({ href, label, Icon }) => {
+        <div className="grid h-[3.75rem] grid-cols-6">
+          {LINKS.map(({ href, label, Icon }) => {
             const active = linkActive(pathname, href);
             return (
               <Link

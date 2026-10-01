@@ -5,9 +5,11 @@ import { FormEvent, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
 import { IconSearch } from "@/components/icons";
 import { GridSkeleton } from "@/components/loading";
+import { useOpenDetail } from "@/components/detail";
 import { Poster, PosterGrid } from "@/components/posters";
 
 type PersonHit = { id: string; name: string; count: number };
+type ExtraHit = Poster & { source?: string };
 
 export default function SearchPage() {
   return (
@@ -20,16 +22,22 @@ export default function SearchPage() {
 function Search() {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Poster[]>([]);
+  const [extra, setExtra] = useState<ExtraHit[]>([]);
   const [people, setPeople] = useState<PersonHit[]>([]);
   const [loading, setLoading] = useState(false);
+  const [extraNote, setExtraNote] = useState("");
   const [status, setStatus] = useState("Cherche un film, une série ou un acteur.");
+  const openDetail = useOpenDetail();
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (query.trim().length < 2) return;
+    const q = query.trim();
     setLoading(true);
+    setExtra([]);
+    setExtraNote("");
     setStatus("");
-    const response = await fetch(`/api/watch/search?q=${encodeURIComponent(query)}`);
+    const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}`);
     const data = (await response.json()) as {
       results?: Poster[];
       people?: PersonHit[];
@@ -42,9 +50,30 @@ function Search() {
       setStatus(data.error || "Recherche impossible");
       return;
     }
-    setItems(data.results || []);
+    const primary = data.results || [];
+    setItems(primary);
     setPeople(data.people || []);
-    setStatus(data.results?.length || data.people?.length ? "" : "Aucun résultat");
+    setStatus(primary.length || data.people?.length ? "" : "Aucun résultat sur FrenchStream");
+    setExtraNote("Recherche sur les autres sources…");
+    const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`);
+    const moreData = (await more.json()) as { results?: ExtraHit[] };
+    const seen = new Set(primary.map((item) => item.title.toLowerCase()));
+    setExtra(
+      (moreData.results || []).filter((item) => item.title && !seen.has(item.title.toLowerCase())),
+    );
+    setExtraNote("");
+  }
+
+  async function openExtra(item: ExtraHit) {
+    setExtraNote("Ouverture…");
+    const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`);
+    const data = (await response.json()) as { result?: Poster; error?: string };
+    setExtraNote("");
+    if (!response.ok || !data.result) {
+      setStatus(data.error || "Pas encore disponible à la lecture");
+      return;
+    }
+    openDetail(data.result);
   }
 
   return (
@@ -95,14 +124,39 @@ function Search() {
 
         {!loading && items.length ? (
           <section>
-            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Titres</h2>
+            <h2 className="mb-4 text-lg font-semibold sm:text-xl">FrenchStream</h2>
             <div className="rise">
               <PosterGrid items={items} />
             </div>
           </section>
         ) : null}
 
-        {!loading && !items.length && !people.length ? (
+        {!loading && extra.length ? (
+          <section>
+            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Autres sources</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+              {extra.map((item) => (
+                <button
+                  key={`${item.source}-${item.kind}-${item.title}`}
+                  type="button"
+                  onClick={() => openExtra(item)}
+                  className="text-left"
+                >
+                  <span className="block aspect-[2/3] overflow-hidden rounded-lg bg-zinc-900">
+                    {item.poster ? (
+                      <img src={item.poster} alt="" className="h-full w-full object-cover" />
+                    ) : null}
+                  </span>
+                  <span className="mt-2 block truncate text-sm">{item.title}</span>
+                  <span className="text-xs text-zinc-500">{item.source}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {extraNote ? <p className="text-sm text-zinc-400">{extraNote}</p> : null}
+
+        {!loading && !items.length && !people.length && !extra.length ? (
           <p className="text-zinc-400">{status}</p>
         ) : null}
       </div>

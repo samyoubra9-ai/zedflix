@@ -10,12 +10,7 @@ import {
 } from "@/components/account";
 import { Spinner } from "@/components/loading";
 import { PinPad, clearPinLock, notePinFail, usePinLockCountdown } from "@/components/pin-pad";
-import {
-  hasBiometric,
-  lastProfileId,
-  saveLastProfileId,
-  verifyBiometric,
-} from "@/components/profile-prefs";
+import { saveLastProfileId } from "@/components/profile-prefs";
 
 type Profile = {
   id: string;
@@ -27,7 +22,6 @@ type Profile = {
   daysLeft?: number | null;
   warning?: "soon" | "urgent" | "expired" | null;
   warningMessage?: string | null;
-  catalogAccess?: "full" | "vod" | "live";
 };
 
 function colorCss(color: number) {
@@ -63,25 +57,8 @@ export default function ProfilesPage() {
         }
         rememberWebSession(data.email);
         setEmail(data.email);
-        const list = data.profiles || [];
-        setProfiles(list);
+        setProfiles(data.profiles || []);
         setLoading(false);
-
-        const lastId = lastProfileId();
-        const last = list.find((profile) => profile.id === lastId);
-        if (last) {
-          if (last.locked && hasBiometric(last.id)) {
-            verifyBiometric(last.id).then((ok) => {
-              if (ok) choose(last, "", true);
-              else setUnlock(last);
-            });
-          } else if (last.locked) {
-            setUnlock(last);
-          } else {
-            // try trusted unlock silently
-            choose(last, "", true);
-          }
-        }
       })
       .catch(() => {
         if (!stop) router.replace("/login?next=/profiles");
@@ -140,9 +117,8 @@ export default function ProfilesPage() {
     }
     clearPinLock(profile.id);
     saveLastProfileId(profile.id);
-    const selected = data.profile || profile;
-    rememberWebProfile(selected);
-    window.location.assign(selected.catalogAccess === "live" ? "/tv" : "/browse");
+    rememberWebProfile(data.profile || profile);
+    window.location.assign("/browse");
   }
 
   async function signOut() {

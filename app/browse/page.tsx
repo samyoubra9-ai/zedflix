@@ -2,16 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AccountGate, SiteNav, useSession } from "@/components/account";
+import { AccountGate, SiteNav } from "@/components/account";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
-import { HeroSkeleton, RowSkeleton } from "@/components/loading";
+import { HeroSkeleton } from "@/components/loading";
 import { MyListButton } from "@/components/my-list-button";
 import { Poster, PosterRow } from "@/components/posters";
 import { useTvMode } from "@/hooks/use-tv-mode";
 import { TvBrowse } from "@/components/tv/tv-browse";
-import { LivePreviewRows } from "@/components/live-preview";
 
 type HeroCard = Poster & { overview: string; backdrop: string };
 type Row = { name: string; items: HeroCard[]; seeAll?: string };
@@ -31,63 +30,78 @@ function BrowseSwitcher() {
   return <BrowseHome />;
 }
 
+function cleanHomeRows(rows: Row[]) {
+  const seen = new Set<string>();
+  return rows
+    .filter((row) => !/aventure|horreur|comédie|comedie|thriller|science|action|drame|fantastique|crime|romance/i.test(row.name))
+    .map((row) => ({
+      ...row,
+      items: (row.items || []).filter((item) => {
+        const key = (item.title || "")
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/\p{M}+/gu, "")
+          .replace(/\s*saison\s*\d+.*/i, "")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        if (!item.id || !item.title || item.title === "null" || !key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    }))
+    .filter((row) => row.items.length > 0);
+}
+
 function BrowseHome() {
-  const { profile } = useSession();
-  const allowLive = profile?.catalogAccess !== "vod";
   const [hero, setHero] = useState<HeroCard[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
+  const [fresh, setFresh] = useState<Row[]>([]);
   const [genres, setGenres] = useState<Genre[]>([]);
   const [index, setIndex] = useState(0);
   const [fade, setFade] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [heroReady, setHeroReady] = useState(false);
   const [status, setStatus] = useState("");
   const openDetail = useOpenDetail();
 
   useEffect(() => {
     let stop = false;
-    Promise.all([
-      fetch("/api/watch/home").then(async (response) => {
-        const data = (await response.json()) as {
-          hero?: HeroCard[];
-          rows?: Row[];
-          error?: string;
-        };
-        return { response, data };
-      }),
-      fetch("/api/watch/genres").then(async (response) => {
+    fetch("/api/watch/home?part=fresh")
+      .then(async (response) => {
+        const data = (await response.json()) as { rows?: Row[] };
+        if (!stop && response.ok) setFresh(cleanHomeRows(data.rows || []));
+      })
+      .catch(() => undefined);
+
+    fetch("/api/watch/genres")
+      .then(async (response) => {
         const data = (await response.json()) as { genres?: Genre[] };
-        return data.genres || [];
-      }).catch(() => [] as Genre[]),
-    ])
-      .then(([home, genreList]) => {
+        if (!stop) setGenres(data.genres || []);
+      })
+      .catch(() => undefined);
+
+    fetch("/api/watch/home?part=spotlight")
+      .then(async (response) => {
+        const data = (await response.json()) as { hero?: HeroCard[]; error?: string };
         if (stop) return;
-        if (!home.response.ok) {
-          setStatus(home.data.error || "L’accueil est indisponible");
-          setLoading(false);
+        if (!response.ok) {
+          setStatus(data.error || "L’accueil est indisponible");
+          setHeroReady(true);
           return;
         }
-        const cleanHero = (home.data.hero || []).filter(
-          (item) => item?.id && item?.title && item.title !== "null",
-        );
-        const cleanRows = (home.data.rows || [])
-          .map((row) => ({
-            ...row,
-            items: (row.items || []).filter(
-              (item) => item?.id && item?.title && item.title !== "null",
-            ),
-          }))
-          .filter((row) => row.items.length > 0);
-        setHero(cleanHero);
-        setRows(cleanRows);
-        setGenres(genreList);
-        setLoading(false);
+        setHero((data.hero || []).filter((item) => item?.id && item.title && item.title !== "null" && item.backdrop));
+        setHeroReady(true);
+        const rowsResponse = await fetch("/api/watch/home?part=rows");
+        const rowsData = (await rowsResponse.json()) as { rows?: Row[] };
+        if (stop) return;
+        if (rowsResponse.ok) setRows(cleanHomeRows(rowsData.rows || []));
       })
       .catch(() => {
         if (!stop) {
           setStatus("L’accueil est indisponible");
-          setLoading(false);
+          setHeroReady(true);
         }
       });
+
     return () => {
       stop = true;
     };
@@ -115,13 +129,41 @@ function BrowseHome() {
   }
 
   const featured = hero[index];
+  const taken = new Set(
+    rows.flatMap((row) =>
+      row.items.map((item) =>
+        (item.title || "")
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/\p{M}+/gu, "")
+          .replace(/\s*saison\s*\d+.*/i, "")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim(),
+      ),
+    ),
+  );
+  const freshRows = fresh
+    .map((row) => ({
+      ...row,
+      items: row.items.filter((item) => {
+        const key = (item.title || "")
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/\p{M}+/gu, "")
+          .replace(/\s*saison\s*\d+.*/i, "")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        return key && !taken.has(key);
+      }),
+    }))
+    .filter((row) => row.items.length > 0);
 
   return (
     <main className="min-h-screen bg-black pb-24 text-white md:pb-10">
       <SiteNav />
-      {loading ? <HeroSkeleton /> : null}
+      {!heroReady ? <HeroSkeleton /> : null}
 
-      {!loading && featured ? (
+      {heroReady && featured ? (
         <section className="relative h-[52vh] min-h-[300px] sm:h-[68vh] sm:min-h-[440px] md:h-[78vh] md:min-h-[520px]">
           {hero.map((card, cardIndex) => (
             <img
@@ -213,26 +255,25 @@ function BrowseHome() {
         </section>
       ) : null}
 
-      {!loading && !featured ? <div className="h-16 sm:h-24" /> : null}
+      {heroReady && !featured ? <div className="h-16 sm:h-24" /> : null}
 
       <div className="relative z-10 space-y-8 px-4 pb-6 sm:-mt-2 sm:space-y-10 sm:px-8 md:px-12">
-        {loading ? (
-          <>
-            <RowSkeleton />
-            <RowSkeleton />
-          </>
+        {heroReady ? (
+          <div className="flex flex-wrap gap-2">
+            <Link href="/films" className="rounded-md bg-white px-4 py-2 text-sm font-semibold text-black">
+              Films
+            </Link>
+            <Link href="/series" className="rounded-md bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/15">
+              Séries
+            </Link>
+            <Link href="/search" className="rounded-md bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/15">
+              Recherche
+            </Link>
+          </div>
         ) : null}
 
-        {!loading ? (
+        {heroReady ? (
           <div className="stagger-row -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
-            {allowLive ? (
-              <Link
-                href="/tv"
-                className="shrink-0 rounded-full bg-[#e50914] px-3.5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(229,9,20,0.35)] sm:text-sm"
-              >
-                Voir toutes les chaînes
-              </Link>
-            ) : null}
             {genres.map((genre) => (
               <Link
                 key={genre.id}
@@ -245,19 +286,27 @@ function BrowseHome() {
           </div>
         ) : null}
 
-        {!loading ? <ContinueWatching /> : null}
-
-        {!loading ? <LivePreviewRows /> : null}
+        {heroReady ? <ContinueWatching /> : null}
 
         {rows.map((row, rowIndex) => (
           <section key={row.name} className="stagger-row" style={{ animationDelay: `${rowIndex * 70}ms` }}>
             <div className="mb-2.5 flex items-end justify-between gap-3 sm:mb-3">
               <h2 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-xl">{row.name}</h2>
               {row.seeAll ? (
-                <Link
-                  href={row.seeAll}
-                  className="shrink-0 text-xs font-medium text-zinc-400 transition hover:text-white sm:text-sm"
-                >
+                <Link href={row.seeAll} className="shrink-0 text-xs font-medium text-zinc-400 hover:text-white sm:text-sm">
+                  Voir tout
+                </Link>
+              ) : null}
+            </div>
+            <PosterRow items={row.items} />
+          </section>
+        ))}
+        {freshRows.map((row) => (
+          <section key={row.name}>
+            <div className="mb-2.5 flex items-end justify-between gap-3 sm:mb-3">
+              <h2 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-xl">{row.name}</h2>
+              {row.seeAll ? (
+                <Link href={row.seeAll} className="shrink-0 text-xs font-medium text-zinc-400 hover:text-white sm:text-sm">
                   Voir tout
                 </Link>
               ) : null}
