@@ -690,9 +690,8 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-6">
         <h2 className="text-lg font-semibold">Profils de {user.email}</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          Chaque profil a sa propre offre et sa propre date. Standard : films, séries et animés.
-          Standard + TV ajoute la TV. TV seulement n’ouvre que la TV. Les profils déjà créés restent
-          Standard + TV tant que l’offre n’est pas changée.
+          Chaque profil a sa propre offre et sa propre date. Prolonger ajoute du temps. Corriger
+          remplace la date : 3 mois veut dire fin dans 3 mois, même si c’était 12 mois.
         </p>
         <div className="mt-5 space-y-3">
           {profiles.map((profile) => {
@@ -776,7 +775,7 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                   >
                     {DURATIONS.map((duration) => (
                       <option key={duration.months} value={duration.months}>
-                        +{duration.label}
+                        {duration.label}
                       </option>
                     ))}
                   </select>
@@ -797,6 +796,24 @@ function ProfileManager({ user, onClose }: { user: AccountRow; onClose: () => vo
                     className="rounded-lg border border-white/15 px-3 py-2 text-sm disabled:opacity-50"
                   >
                     Prolonger
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const response = await fetch(`/admin/users/${user.id}/profiles/${profile.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ set: true, months: draft.months }),
+                        });
+                        const body = await response.json();
+                        if (!response.ok) throw new Error(body.error || "Correction impossible");
+                      })
+                    }
+                    className="rounded-lg border border-white/15 px-3 py-2 text-sm disabled:opacity-50"
+                  >
+                    Corriger
                   </button>
                   <button
                     type="button"

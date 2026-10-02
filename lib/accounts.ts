@@ -439,6 +439,30 @@ export async function extendAccount(id: string, months: number) {
   return { email: data.user.email, expiresAt: summary.expiresAt, months, profiles: profiles.map(publicProfile) };
 }
 
+export async function adminSetProfileExpiry(userId: string, profileId: string, months: number) {
+  assertUserId(userId);
+  if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);
+  if (!DURATIONS.includes(months as (typeof DURATIONS)[number])) {
+    throw new AccountError("Durée invalide", 400);
+  }
+  const user = await accountUser(userId);
+  const current = profilesOf(user.app_metadata);
+  const existing = current.find((profile) => profile.id === profileId);
+  if (!existing) throw new AccountError("Profil introuvable", 404);
+  const profile: StoredProfile = {
+    ...existing,
+    expiresAt: expirationDate(months),
+    trialUsed: true,
+  };
+  await saveProfiles(
+    user.id,
+    user.app_metadata,
+    current.map((item) => (item.id === profileId ? profile : item)),
+    { expires_at: null },
+  );
+  return publicProfile(profile);
+}
+
 export async function adminExtendProfile(userId: string, profileId: string, months: number) {
   assertUserId(userId);
   if (!/^[a-zA-Z0-9]{4,40}$/.test(profileId)) throw new AccountError("Profil introuvable", 400);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { adminDeleteProfile, adminExtendProfile, adminUpdateProfile } from "@/lib/accounts";
+import { adminDeleteProfile, adminExtendProfile, adminSetProfileExpiry, adminUpdateProfile } from "@/lib/accounts";
 import { requireAdmin } from "@/lib/admin";
 import { fail, readJson } from "@/lib/http";
 import { removeLibraryFolder } from "@/lib/library";
@@ -11,6 +11,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     requireAdmin(request);
     const { id, profileId } = await context.params;
     const body = await readJson(request);
+    if (body.set === true) {
+      return NextResponse.json(await adminSetProfileExpiry(id, profileId, Number(body.months)));
+    }
     if (body.extend === true || body.months) {
       return NextResponse.json(await adminExtendProfile(id, profileId, Number(body.months)));
     }
