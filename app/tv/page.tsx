@@ -4,11 +4,9 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AccountGate, rememberCatalogTab, SiteNav } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
+import { channelInitial, LetterBar, useLiveGroups } from "@/components/tv/live-catalog";
 import { TvLiveBrowse } from "@/components/tv/tv-live";
 import { useTvMode } from "@/hooks/use-tv-mode";
-
-type Channel = { id: string; name: string; logo: string; url: string };
-type Group = { id: string; name: string; channels: Channel[] };
 
 export default function TvPage() {
   return (
@@ -30,11 +28,10 @@ function TvPageBody() {
 
 function MobileLive() {
   const params = useSearchParams();
-  const [groups, setGroups] = useState<Group[]>([]);
+  const { groups, loading, filling, status } = useLiveGroups();
   const [query, setQuery] = useState(params.get("q") || "");
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("");
   const [activeGroup, setActiveGroup] = useState<string>("all");
+  const [letter, setLetter] = useState("all");
   const [channelId, setChannelId] = useState<string | null>(null);
 
   function openChannel(id: string) {
@@ -44,35 +41,9 @@ function MobileLive() {
 
   useEffect(() => {
     rememberCatalogTab("live");
-    let stop = false;
-    setLoading(true);
-    setStatus("");
-    fetch("/api/watch/live")
-      .then(async (response) => {
-        const data = (await response.json()) as { groups?: Group[]; error?: string };
-        if (stop) return;
-        if (!response.ok) {
-          setStatus(data.error || "TV live indisponible");
-          setGroups([]);
-          setLoading(false);
-          return;
-        }
-        setGroups(data.groups || []);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!stop) {
-          setStatus("TV live indisponible");
-          setGroups([]);
-          setLoading(false);
-        }
-      });
-    return () => {
-      stop = true;
-    };
   }, []);
 
-  const filtered = useMemo(() => {
+  const matched = useMemo(() => {
     const q = query.trim().toLowerCase();
     return groups
       .filter((group) => activeGroup === "all" || group.id === activeGroup)
@@ -84,6 +55,27 @@ function MobileLive() {
       }))
       .filter((group) => group.channels.length > 0);
   }, [groups, query, activeGroup]);
+
+  const present = useMemo(() => {
+    const letters = new Set<string>();
+    for (const group of matched) {
+      for (const channel of group.channels) {
+        const initial = channelInitial(channel.name);
+        if (initial) letters.add(initial);
+      }
+    }
+    return letters;
+  }, [matched]);
+
+  const filtered = useMemo(() => {
+    if (letter === "all") return matched;
+    return matched
+      .map((group) => ({
+        ...group,
+        channels: group.channels.filter((channel) => channelInitial(channel.name) === letter),
+      }))
+      .filter((group) => group.channels.length > 0);
+  }, [matched, letter]);
 
   const total = filtered.reduce((sum, group) => sum + group.channels.length, 0);
 
@@ -103,7 +95,9 @@ function MobileLive() {
           </p>
           <h1 className="mt-1 text-3xl font-bold sm:text-4xl">TV Live</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            {loading ? "Chargement des chaînes…" : `${total} chaîne${total > 1 ? "s" : ""}`}
+            {loading
+              ? "Chargement des chaînes…"
+              : `${total} chaîne${total > 1 ? "s" : ""}${filling ? " · chargement…" : ""}`}
           </p>
         </div>
 
@@ -118,7 +112,10 @@ function MobileLive() {
       <div className="mt-5 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
-          onClick={() => setActiveGroup("all")}
+          onClick={() => {
+            setActiveGroup("all");
+            setLetter("all");
+          }}
           className={`shrink-0 rounded-full px-3.5 py-2 text-xs font-medium ring-1 transition sm:text-sm ${
             activeGroup === "all"
               ? "bg-[#e50914] text-white ring-[#e50914]"
@@ -131,7 +128,10 @@ function MobileLive() {
           <button
             key={group.id}
             type="button"
-            onClick={() => setActiveGroup(group.id)}
+            onClick={() => {
+              setActiveGroup(group.id);
+              setLetter("all");
+            }}
             className={`shrink-0 rounded-full px-3.5 py-2 text-xs font-medium ring-1 transition sm:text-sm ${
               activeGroup === group.id
                 ? "bg-[#e50914] text-white ring-[#e50914]"
@@ -141,6 +141,15 @@ function MobileLive() {
             {group.name}
           </button>
         ))}
+      </div>
+
+      <div className="mt-3">
+        <LetterBar
+          present={present}
+          selected={letter}
+          filling={filling}
+          onSelect={setLetter}
+        />
       </div>
 
       {loading ? (
@@ -185,7 +194,13 @@ function MobileLive() {
         ))}
       </div>
 
-      {!loading && !status && !filtered.length ? (
+      {!loading && filling && !filtered.length ? (
+        <div className="mt-10 flex justify-center">
+          <span className="inline-block h-8 w-8 animate-spin rounded-full border-[3px] border-white/10 border-t-[#e50914]" />
+        </div>
+      ) : null}
+
+      {!loading && !filling && !status && !filtered.length ? (
         <p className="mt-10 rounded-xl bg-white/5 px-4 py-8 text-center text-zinc-400 ring-1 ring-white/10">
           Aucune chaîne ne correspond à ta recherche.
         </p>

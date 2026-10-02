@@ -376,17 +376,8 @@ function preferBest(channels: Array<LiveChannel & { rawName?: string }>) {
     .sort((a, b) => a.name.localeCompare(b.name, "fr"));
 }
 
-async function fetchGroup(group: string): Promise<LiveChannel[]> {
-  const items: RawItem[] = [];
-  let cursor: number | null = null;
-  for (let page = 0; page < 20; page += 1) {
-    const result = await fetchCatalogPage(group, cursor);
-    items.push(...result.items);
-    if (result.next === null) break;
-    cursor = result.next;
-  }
-
-  const channels = items
+function mapRawChannels(items: RawItem[]) {
+  return items
     .map((item) => {
       const url = item.url?.trim() || "";
       const rawName = item.name?.trim() || "";
@@ -402,6 +393,19 @@ async function fetchGroup(group: string): Promise<LiveChannel[]> {
       };
     })
     .filter((item): item is LiveChannel & { rawName: string } => !!item);
+}
+
+async function fetchGroup(group: string): Promise<LiveChannel[]> {
+  const items: RawItem[] = [];
+  let cursor: number | null = null;
+  for (let page = 0; page < 20; page += 1) {
+    const result = await fetchCatalogPage(group, cursor);
+    items.push(...result.items);
+    if (result.next === null) break;
+    cursor = result.next;
+  }
+
+  const channels = mapRawChannels(items);
 
   const logos = new Map<string, string>();
   for (const channel of channels) {
@@ -422,6 +426,47 @@ async function fetchGroup(group: string): Promise<LiveChannel[]> {
           : logos.get(channelKey(channel.name)) || resolveLogo(channel.name),
     })),
   );
+}
+
+export type LiveSlice = {
+  groups: LiveGroup[];
+  next: string | null;
+};
+
+/** One catalog page. The first call returns as soon as the first page arrives. */
+export async function liveCatalogSlice(token: string | null): Promise<LiveSlice> {
+  if (!token && catalogCache && Date.now() - catalogCache.at < CACHE_MS) {
+    for (const group of catalogCache.groups) {
+      for (const channel of group.channels) byId.set(channel.id, channel);
+    }
+    return { groups: catalogCache.groups, next: null };
+  }
+
+  const [groupRaw, cursorRaw] = (token || "0:").split(":");
+  const groupIndex = Number(groupRaw);
+  if (!Number.isInteger(groupIndex) || groupIndex < 0 || groupIndex >= GROUPS.length) {
+    return { groups: [], next: null };
+  }
+
+  const group = GROUPS[groupIndex];
+  const cursor = cursorRaw && Number.isFinite(Number(cursorRaw)) ? Number(cursorRaw) : null;
+  const page = await fetchCatalogPage(group.id, cursor);
+  const channels = preferBest(mapRawChannels(page.items));
+  for (const channel of channels) byId.set(channel.id, channel);
+
+  const hasMoreInGroup = page.next != null && page.items.length > 0;
+  const next = hasMoreInGroup
+    ? `${groupIndex}:${page.next}`
+    : groupIndex + 1 < GROUPS.length
+      ? `${groupIndex + 1}:`
+      : null;
+
+  return {
+    groups: channels.length
+      ? [{ id: group.id, name: group.label, channels }]
+      : [],
+    next,
+  };
 }
 
 export async function liveCatalog(): Promise<LiveGroup[]> {

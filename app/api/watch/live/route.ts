@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
-import { liveCatalog } from "@/lib/live";
+import { liveCatalogSlice } from "@/lib/live";
 import { hasWebSession, requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +16,8 @@ export async function GET(request: NextRequest) {
     }
   }
   try {
-    const groups = await liveCatalog();
-    const response = NextResponse.json({ groups });
+    const page = await liveCatalogSlice(request.nextUrl.searchParams.get("cursor"));
+    const response = NextResponse.json(page);
     return known ? response : seal(request, response);
   } catch (error) {
     if (error instanceof AccountError) {

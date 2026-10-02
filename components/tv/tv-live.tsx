@@ -3,17 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { rememberCatalogTab } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
-
-type Channel = { id: string; name: string; logo: string; url: string };
-type Group = { id: string; name: string; channels: Channel[] };
-
-const LETTERS = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")];
+import { channelInitial, LetterBar, useLiveGroups, type LiveChannel } from "@/components/tv/live-catalog";
 
 /** Leanback-style live TV grid — built for D-pad / remote. */
 export function TvLiveBrowse() {
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("");
+  const { groups, loading, filling, status } = useLiveGroups();
   const [activeGroup, setActiveGroup] = useState("all");
   const [letter, setLetter] = useState("all");
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -26,46 +20,34 @@ export function TvLiveBrowse() {
 
   useEffect(() => {
     rememberCatalogTab("live");
-    let stop = false;
-    fetch("/api/watch/live")
-      .then(async (response) => {
-        const data = (await response.json()) as { groups?: Group[]; error?: string };
-        if (stop) return;
-        if (!response.ok) {
-          setStatus(data.error || "TV live indisponible");
-          setGroups([]);
-          setLoading(false);
-          return;
-        }
-        setGroups(data.groups || []);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!stop) {
-          setStatus("TV live indisponible");
-          setGroups([]);
-          setLoading(false);
-        }
-      });
-    return () => {
-      stop = true;
-    };
   }, []);
 
-  const filtered = useMemo(() => {
+  const matched = useMemo(() => {
     return groups
       .filter((group) => activeGroup === "all" || group.id === activeGroup)
+      .filter((group) => group.channels.length > 0);
+  }, [groups, activeGroup]);
+
+  const present = useMemo(() => {
+    const letters = new Set<string>();
+    for (const group of matched) {
+      for (const channel of group.channels) {
+        const initial = channelInitial(channel.name);
+        if (initial) letters.add(initial);
+      }
+    }
+    return letters;
+  }, [matched]);
+
+  const filtered = useMemo(() => {
+    if (letter === "all") return matched;
+    return matched
       .map((group) => ({
         ...group,
-        channels: group.channels.filter((channel) => {
-          if (letter === "all") return true;
-          const initial = channel.name.trim().charAt(0).toUpperCase();
-          if (letter === "#") return !/[A-Z]/.test(initial);
-          return initial === letter;
-        }),
+        channels: group.channels.filter((channel) => channelInitial(channel.name) === letter),
       }))
       .filter((group) => group.channels.length > 0);
-  }, [groups, activeGroup, letter]);
+  }, [matched, letter]);
 
   const total = filtered.reduce((sum, group) => sum + group.channels.length, 0);
   const flat = useMemo(() => filtered.flatMap((group) => group.channels), [filtered]);
@@ -94,7 +76,7 @@ export function TvLiveBrowse() {
             <p className="mt-2 text-base text-zinc-400">
               {loading
                 ? "Chargement des chaînes…"
-                : `${total} chaîne${total > 1 ? "s" : ""} · OK pour lancer`}
+                : `${total} chaîne${total > 1 ? "s" : ""}${filling ? " · chargement…" : ""}`}
             </p>
           </div>
           {!loading && flat[0] ? (
@@ -136,23 +118,13 @@ export function TvLiveBrowse() {
           ))}
         </div>
 
-        <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <Chip
-            label="A–Z"
-            compact
-            active={letter === "all"}
-            onClick={() => setLetter("all")}
-          />
-          {LETTERS.map((item) => (
-            <Chip
-              key={item}
-              label={item}
-              compact
-              active={letter === item}
-              onClick={() => setLetter(item)}
-            />
-          ))}
-        </div>
+        <LetterBar
+          present={present}
+          selected={letter}
+          filling={filling}
+          compact
+          onSelect={setLetter}
+        />
       </div>
 
       {loading ? (
@@ -181,7 +153,13 @@ export function TvLiveBrowse() {
         ))}
       </div>
 
-      {!loading && !status && !filtered.length ? (
+      {!loading && filling && !filtered.length ? (
+        <div className="flex h-24 items-center justify-center">
+          <span className="inline-block h-10 w-10 animate-spin rounded-full border-[3px] border-white/10 border-t-[#e50914]" />
+        </div>
+      ) : null}
+
+      {!loading && !filling && !status && !filtered.length ? (
         <p className="mx-10 mt-10 rounded-2xl bg-white/5 px-6 py-10 text-center text-zinc-400 ring-1 ring-white/10">
           Aucune chaîne dans ce filtre.
         </p>
@@ -226,7 +204,7 @@ function ChannelTile({
   autofocus,
   onOpen,
 }: {
-  channel: Channel;
+  channel: LiveChannel;
   autofocus?: boolean;
   onOpen: () => void;
 }) {
