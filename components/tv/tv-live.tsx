@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { rememberCatalogTab } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
-import { channelInitial, LetterBar, useLiveGroups, type LiveChannel } from "@/components/tv/live-catalog";
+import { channelInitial, ChannelFace, LetterBar, useLiveGroups, type LiveChannel } from "@/components/tv/live-catalog";
 
 /** Leanback-style live TV grid — built for D-pad / remote. */
 export function TvLiveBrowse() {
@@ -224,17 +224,8 @@ function ChannelTile({
       tabIndex={0}
       className="tv-focus tv-channel group flex flex-col rounded-2xl bg-white/[0.04] p-3 text-center outline-none ring-1 ring-white/10"
     >
-      <span className="mx-auto flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-zinc-950/90 p-4">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={channel.logo}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          width={128}
-          height={128}
-          className="max-h-full max-w-full object-contain transition duration-150 group-focus:scale-105"
-        />
+      <span className="mx-auto flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-black p-4">
+        <ChannelFace name={channel.name} logo={channel.logo} />
       </span>
       <span className="mt-3 line-clamp-2 min-h-[2.5rem] text-sm font-semibold leading-snug text-zinc-100">
         {channel.name}

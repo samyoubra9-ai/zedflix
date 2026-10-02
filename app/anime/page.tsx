@@ -19,7 +19,7 @@ function AnimeHome() {
   const [status, setStatus] = useState("");
 
   async function open(item: Poster) {
-    setStatus("");
+    setStatus("Vérification…");
     try {
       const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
         signal: AbortSignal.timeout(8000),
@@ -29,6 +29,7 @@ function AnimeHome() {
         setStatus("Pas encore disponible à la lecture");
         return;
       }
+      setStatus("");
       openDetail(data.result);
     } catch {
       setStatus("Pas encore disponible à la lecture");
@@ -39,7 +40,9 @@ function AnimeHome() {
     <>
       <CatalogBoard endpoint="/api/watch/anime" tab="anime" title="Animés" onOpen={open} />
       {status ? (
-        <p className="fixed inset-x-0 bottom-24 z-50 px-4 text-center text-sm text-zinc-200 md:bottom-8">{status}</p>
+        <p className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-full bg-zinc-900 px-5 py-3 text-sm text-white ring-1 ring-white/15 md:bottom-8">
+          {status}
+        </p>
       ) : null}
     </>
   );

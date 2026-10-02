@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { AccountGate, SiteNav, currentCatalogTab, type CatalogTab } from "@/components/account";
 import { IconSearch } from "@/components/icons";
-import { GridSkeleton } from "@/components/loading";
 import { useOpenDetail } from "@/components/detail";
 import { Poster, PosterGrid } from "@/components/posters";
 
@@ -27,6 +26,8 @@ function Search() {
   const [people, setPeople] = useState<PersonHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Cherche un titre.");
+  const [notice, setNotice] = useState("");
+  const [canRetry, setCanRetry] = useState(false);
   const openDetail = useOpenDetail();
   const requestId = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -43,20 +44,20 @@ function Search() {
       openDetail(item);
       return;
     }
-    setStatus("Ouverture…");
+    setNotice("Ouverture…");
     try {
       const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
         signal: AbortSignal.timeout(8000),
       });
       const data = (await response.json()) as { result?: Poster; error?: string };
       if (!response.ok || !data.result?.id) {
-        setStatus("Pas encore disponible à la lecture");
+        setNotice("Pas encore disponible à la lecture");
         return;
       }
-      setStatus("");
+      setNotice("");
       openDetail(data.result);
     } catch {
-      setStatus("Pas encore disponible à la lecture");
+      setNotice("Pas encore disponible à la lecture");
     }
   }
 
@@ -74,7 +75,8 @@ function Search() {
     abortRef.current = controller;
     const timer = window.setTimeout(() => controller.abort(), 12000);
     setLoading(true);
-    setStatus("");
+    setNotice("");
+    setCanRetry(false);
     try {
       const tabQuery = tab === "anime" ? "&tab=anime" : "";
       const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}${tabQuery}`, {
@@ -87,9 +89,8 @@ function Search() {
       };
       if (id !== requestId.current) return;
       if (!response.ok) {
-        setItems([]);
-        setPeople([]);
-        setStatus(data.error || "Recherche impossible. Réessaie.");
+        setCanRetry(true);
+        setNotice(data.error || "Recherche impossible. Réessaie.");
         return;
       }
       const primary = data.results || [];
@@ -115,9 +116,8 @@ function Search() {
       }
     } catch {
       if (id !== requestId.current) return;
-      setItems([]);
-      setPeople([]);
-      setStatus("Recherche impossible. Réessaie.");
+      setCanRetry(true);
+      setNotice("Recherche impossible. Réessaie.");
     } finally {
       window.clearTimeout(timer);
       if (id === requestId.current) setLoading(false);
@@ -128,7 +128,7 @@ function Search() {
     <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
       <h1 className="text-3xl font-bold sm:text-4xl">Recherche</h1>
-      <form onSubmit={onSubmit} className="mt-6 flex max-w-2xl gap-2 sm:mt-8 sm:gap-3">
+      <form id="catalog-search" onSubmit={onSubmit} className="mt-6 flex max-w-2xl gap-2 sm:mt-8 sm:gap-3">
         <div className="relative min-w-0 flex-1">
           <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <input
@@ -146,9 +146,14 @@ function Search() {
         </button>
       </form>
       <div className="mt-8 space-y-10 sm:mt-10">
-        {loading ? <GridSkeleton /> : null}
+        {loading ? (
+          <div className="flex items-center gap-3 text-sm text-zinc-300">
+            <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-white/15 border-t-[#e50914]" />
+            Recherche…
+          </div>
+        ) : null}
 
-        {!loading && people.length ? (
+        {people.length ? (
           <section>
             <h2 className="mb-4 text-lg font-semibold sm:text-xl">Acteurs</h2>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -170,7 +175,7 @@ function Search() {
           </section>
         ) : null}
 
-        {!loading && items.length ? (
+        {items.length ? (
           <section>
             <div className="rise">
               <PosterGrid items={items} onOpen={openItem} />
@@ -182,6 +187,23 @@ function Search() {
           <p className="text-zinc-400">{status}</p>
         ) : null}
       </div>
+      {notice ? (
+        <div className="fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full bg-zinc-900 px-5 py-3 text-sm text-white ring-1 ring-white/15 md:bottom-8">
+          <span>{notice}</span>
+          {canRetry ? (
+            <button
+              type="button"
+              className="rounded-full bg-[#e50914] px-3 py-1 text-xs font-semibold"
+              onClick={() => {
+                const form = document.getElementById("catalog-search");
+                if (form instanceof HTMLFormElement) form.requestSubmit();
+              }}
+            >
+              Réessayer
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </main>
   );
 }

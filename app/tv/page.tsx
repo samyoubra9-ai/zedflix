@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AccountGate, rememberCatalogTab, SiteNav } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
-import { channelInitial, LetterBar, useLiveGroups } from "@/components/tv/live-catalog";
+import { channelInitial, ChannelFace, LetterBar, useLiveGroups } from "@/components/tv/live-catalog";
 import { TvLiveBrowse } from "@/components/tv/tv-live";
 import { useTvMode } from "@/hooks/use-tv-mode";
 
@@ -172,17 +172,8 @@ function MobileLive() {
                   onClick={() => openChannel(channel.id)}
                   className="group rounded-xl bg-white/5 p-2.5 text-center ring-1 ring-white/10 transition hover:bg-white/10 hover:ring-white/25"
                 >
-                  <span className="mx-auto flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-950/80 p-2.5">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={channel.logo}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      width={96}
-                      height={96}
-                      className="max-h-full max-w-full object-contain"
-                    />
+                  <span className="mx-auto flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-black p-2.5">
+                    <ChannelFace name={channel.name} logo={channel.logo} />
                   </span>
                   <span className="mt-2 block line-clamp-2 text-[11px] font-medium leading-snug text-zinc-200 sm:text-xs">
                     {channel.name}

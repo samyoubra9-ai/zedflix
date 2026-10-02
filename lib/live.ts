@@ -5,8 +5,10 @@ const CATALOG = `${BASE}/mediahubmx-catalog.json`;
 const RESOLVE = `${BASE}/mediahubmx-resolve.json`;
 const FR_LOGO_BASE =
   "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/france/";
-const FALLBACK_LOGO =
-  "https://www.clipartmax.com/png/full/46-463028_television-images-clip-art.png";
+function usableLogo(logo?: string | null) {
+  const value = logo?.trim() || "";
+  return value.length > 0 && !value.includes("clipartmax.com");
+}
 const CACHE_MS = 20 * 60 * 1000;
 
 const GROUPS = [
@@ -307,11 +309,11 @@ function slugify(key: string) {
 }
 
 export function resolveLogo(display: string, apiLogo?: string | null) {
-  if (apiLogo?.trim()) return apiLogo.trim();
+  if (usableLogo(apiLogo)) return apiLogo!.trim();
   const key = channelKey(display);
   const alias = LOGO_ALIASES[key];
   const slug = alias || (FR_LOGO_SLUGS.has(slugify(key)) ? slugify(key) : null);
-  return slug ? `${FR_LOGO_BASE}${slug}-fr.png` : FALLBACK_LOGO;
+  return slug ? `${FR_LOGO_BASE}${slug}-fr.png` : "";
 }
 
 type RawItem = {
@@ -362,8 +364,7 @@ function preferBest(channels: Array<LiveChannel & { rawName?: string }>) {
       map.set(key, channel);
       continue;
     }
-    const betterLogo =
-      Number(channel.logo !== FALLBACK_LOGO) - Number(current.logo !== FALLBACK_LOGO);
+    const betterLogo = Number(usableLogo(channel.logo)) - Number(usableLogo(current.logo));
     const betterQuality =
       webQualityScore(channel.rawName || channel.name) -
       webQualityScore(current.rawName || current.name);
@@ -409,7 +410,7 @@ async function fetchGroup(group: string): Promise<LiveChannel[]> {
 
   const logos = new Map<string, string>();
   for (const channel of channels) {
-    if (channel.logo && channel.logo !== FALLBACK_LOGO) {
+    if (usableLogo(channel.logo)) {
       logos.set(channelKey(channel.name), channel.logo);
     }
   }
@@ -420,10 +421,9 @@ async function fetchGroup(group: string): Promise<LiveChannel[]> {
       name: channel.name,
       rawName: channel.rawName,
       url: channel.url,
-      logo:
-        channel.logo !== FALLBACK_LOGO
-          ? channel.logo
-          : logos.get(channelKey(channel.name)) || resolveLogo(channel.name),
+      logo: usableLogo(channel.logo)
+        ? channel.logo
+        : logos.get(channelKey(channel.name)) || "",
     })),
   );
 }
@@ -530,7 +530,7 @@ export async function resolveLiveStream(id: string) {
   return {
     stream,
     name: channel?.name || displayName(data[0]?.name || "Direct"),
-    logo: channel?.logo || FALLBACK_LOGO,
+    logo: usableLogo(channel?.logo) ? channel!.logo : "",
   };
 }
 

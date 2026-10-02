@@ -14,6 +14,50 @@ export function channelInitial(name: string) {
   return /^[A-Z]$/.test(letter) ? letter : "";
 }
 
+export function channelLetters(name: string) {
+  const clean = name
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\b(uhd|4k|fhd|hd|sd)\b/gi, " ")
+    .replace(/[^A-Za-z0-9 ]+/g, " ")
+    .trim();
+  const words = clean.split(/\s+/).filter(Boolean);
+  const mark = words
+    .slice(0, 2)
+    .map((word) => word.match(/[A-Za-z]/)?.[0]?.toLocaleUpperCase("fr") || "")
+    .join("");
+  if (mark) return mark;
+  const one = clean.match(/[A-Za-z]/)?.[0]?.toLocaleUpperCase("fr");
+  return one || "TV";
+}
+
+export function ChannelFace({ name, logo }: { name: string; logo: string }) {
+  const [broken, setBroken] = useState(false);
+  const missing = broken || !logo || logo.includes("clipartmax.com");
+  if (missing) {
+    return (
+      <span className="flex h-full w-full items-center justify-center bg-black">
+        <span className="flex h-[58%] w-[58%] items-center justify-center rounded-full bg-[#e50914] text-sm font-bold tracking-wide text-white">
+          {channelLetters(name)}
+        </span>
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={logo}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      width={128}
+      height={128}
+      className="max-h-full max-w-full object-contain"
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 function mergeKey(name: string) {
   return name
     .normalize("NFD")
@@ -41,9 +85,9 @@ export function mergeLiveGroups(current: LiveGroup[], incoming: LiveGroup[]) {
         byKey.set(key, channel);
         continue;
       }
-      const previousFallback = previous.logo.includes("clipartmax.com");
-      const nextReal = !channel.logo.includes("clipartmax.com");
-      if (previousFallback && nextReal) byKey.set(key, channel);
+      const previousMissing = !previous.logo || previous.logo.includes("clipartmax.com");
+      const nextReal = Boolean(channel.logo) && !channel.logo.includes("clipartmax.com");
+      if (previousMissing && nextReal) byKey.set(key, channel);
     }
     target.channels = [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name, "fr"));
   }
