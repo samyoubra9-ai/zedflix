@@ -19,10 +19,20 @@ export function armLiveSound() {
   void audio.play().catch(() => undefined);
 }
 
-export function LiveStage({ id, onClose }: { id: string; onClose: () => void }) {
+export function LiveStage({
+  id,
+  onClose,
+  back = "/tv",
+  playPath,
+}: {
+  id: string;
+  onClose: () => void;
+  back?: string;
+  playPath?: string;
+}) {
   return (
     <div className="fixed inset-0 z-[80] bg-black">
-      <Player id={id} live back="/tv" onClose={onClose} />
+      <Player id={id} live back={back} playPath={playPath} onClose={onClose} />
     </div>
   );
 }

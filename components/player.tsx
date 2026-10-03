@@ -57,6 +57,7 @@ export function Player({
   back,
   live = false,
   saver = false,
+  playPath,
   onClose,
 }: {
   id: string;
@@ -65,6 +66,8 @@ export function Player({
   live?: boolean;
   /** Prefer the lightest HLS rung (data saver / weak networks). */
   saver?: boolean;
+  /** Same live player, with a different address for the stream. */
+  playPath?: string;
   onClose?: () => void;
 }) {
   const kind = live ? "movie" : episode ? "show" : "movie";
@@ -97,6 +100,10 @@ export function Player({
   const [skipFlash, setSkipFlash] = useState<null | -10 | 10>(null);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const liveRefreshCount = useRef(0);
+  const liveRefreshTimer = useRef<number | null>(null);
+  const liveHealthyTimer = useRef<number | null>(null);
+  const suppressMediaError = useRef(false);
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [activeServer, setActiveServer] = useState<string | null>(null);
   const [preferredServer, setPreferredServer] = useState<string | null>(null);
@@ -120,6 +127,39 @@ export function Player({
       }
     }, tv ? 4200 : 3200);
   }, [tv]);
+
+  const scheduleLiveRefresh = useCallback(() => {
+    if (!live) return false;
+    if (liveRefreshTimer.current != null) return true;
+    if (liveRefreshCount.current >= 4) return false;
+    if (liveHealthyTimer.current) {
+      window.clearTimeout(liveHealthyTimer.current);
+      liveHealthyTimer.current = null;
+    }
+    liveRefreshCount.current += 1;
+    const attempt = liveRefreshCount.current;
+    const wait = attempt === 1 ? 600 : attempt === 2 ? 1200 : 2000;
+    setLoading(true);
+    setBuffering(true);
+    setStatus("");
+    liveRefreshTimer.current = window.setTimeout(() => {
+      liveRefreshTimer.current = null;
+      setReloadKey((key) => key + 1);
+    }, wait);
+    return true;
+  }, [live]);
+
+  useEffect(() => {
+    liveRefreshCount.current = 0;
+    if (liveRefreshTimer.current) {
+      window.clearTimeout(liveRefreshTimer.current);
+      liveRefreshTimer.current = null;
+    }
+    if (liveHealthyTimer.current) {
+      window.clearTimeout(liveHealthyTimer.current);
+      liveHealthyTimer.current = null;
+    }
+  }, [id]);
 
   useEffect(() => {
     setPreferredServer(null);
@@ -185,6 +225,7 @@ export function Player({
     setQuality(-1);
     let hls: Hls | null = null;
     let stop = false;
+    let mediaRecovered = false;
     setEnglishPrompt(false);
     const params = new URLSearchParams({ id });
     if (!live) {
@@ -192,9 +233,11 @@ export function Player({
       if (preferredServer) params.set("server", preferredServer);
       if (allowEnglish) params.set("allowEnglish", "1");
     }
-    const path = live
-      ? `/api/watch/live/play?${params.toString()}`
-      : `/api/watch/play?${params.toString()}`;
+    const path = playPath
+      ? playPath
+      : live
+        ? `/api/watch/live/play?${params.toString()}`
+        : `/api/watch/play?${params.toString()}`;
 
     fetch(path)
       .then(async (response) => {
@@ -219,8 +262,9 @@ export function Player({
           return;
         }
         if (!response.ok || !data.src) {
+          if (!stop && scheduleLiveRefresh()) return;
           setLoading(false);
-          setStatus(data.error || "Lecture impossible");
+          setStatus(live ? "La chaîne ne répond plus." : data.error || "Lecture impossible");
           return;
         }
         if (data.server) setActiveServer(data.server);
@@ -356,7 +400,19 @@ export function Player({
           });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
           hls.on(Hls.Events.ERROR, (_event, info) => {
-            if (!info.fatal || !hls) return;
+            if (stop || !info.fatal || !hls) return;
+            if (live) {
+              if (info.type === Hls.ErrorTypes.MEDIA_ERROR && !mediaRecovered) {
+                mediaRecovered = true;
+                hls.recoverMediaError();
+                return;
+              }
+              if (scheduleLiveRefresh()) return;
+              setLoading(false);
+              setBuffering(false);
+              setStatus("La chaîne ne répond plus.");
+              return;
+            }
             if (info.type === Hls.ErrorTypes.NETWORK_ERROR) {
               hls.startLoad();
               return;
@@ -399,21 +455,23 @@ export function Player({
         }
       })
       .catch(() => {
+        if (!stop && scheduleLiveRefresh()) return;
         if (!stop) {
           setLoading(false);
-          setStatus("Lecture impossible");
+          setStatus(live ? "La chaîne ne répond plus." : "Lecture impossible");
         }
       });
 
     return () => {
       stop = true;
+      suppressMediaError.current = true;
       hlsRef.current = null;
       hls?.destroy();
       video.removeAttribute("src");
       video.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver]);
+  }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver, playPath, scheduleLiveRefresh]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -434,6 +492,12 @@ export function Player({
     const onPlaying = () => {
       setLoading(false);
       setBuffering(false);
+      suppressMediaError.current = false;
+      if (!live) return;
+      if (liveHealthyTimer.current) window.clearTimeout(liveHealthyTimer.current);
+      liveHealthyTimer.current = window.setTimeout(() => {
+        liveRefreshCount.current = 0;
+      }, 12_000);
     };
     const onTime = () => {
       setCurrent(video.currentTime);
@@ -447,9 +511,11 @@ export function Player({
       setMuted(video.muted);
     };
     const onError = () => {
+      if (suppressMediaError.current) return;
+      if (live && scheduleLiveRefresh()) return;
       setLoading(false);
       setBuffering(false);
-      setStatus("Le lecteur n’a pas pu lire la vidéo.");
+      setStatus(live ? "La chaîne ne répond plus." : "Le lecteur n’a pas pu lire la vidéo.");
     };
 
     video.addEventListener("play", onPlay);
@@ -472,7 +538,7 @@ export function Player({
       video.removeEventListener("volumechange", onVolume);
       video.removeEventListener("error", onError);
     };
-  }, [showControls]);
+  }, [showControls, live, scheduleLiveRefresh]);
 
   useEffect(() => {
     if (live) return;
