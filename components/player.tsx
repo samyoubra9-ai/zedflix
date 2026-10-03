@@ -30,6 +30,41 @@ type Menu = null | "root" | "speed" | "quality" | "server";
 type ServerOption = { id: string; label: string; version: "vf" | "vo" | "vostfr" };
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+const LIVE_RENEW_MS = 210_000;
+
+function liveHlsConfig() {
+  return {
+    enableWorker: true,
+    lowLatencyMode: false,
+    startLevel: -1,
+    capLevelToPlayerSize: false,
+    maxBufferLength: 12,
+    maxMaxBufferLength: 24,
+    maxBufferSize: 12 * 1000 * 1000,
+    backBufferLength: 0,
+    liveSyncDurationCount: 2,
+    liveMaxLatencyDurationCount: 6,
+    liveDurationInfinity: true,
+    maxLiveSyncPlaybackRate: 1,
+    highBufferWatchdogPeriod: 2,
+    maxBufferHole: 0.5,
+    nudgeMaxRetry: 3,
+    forceKeyFrameOnDiscontinuity: true,
+    startFragPrefetch: true,
+    manifestLoadingTimeOut: 8000,
+    manifestLoadingMaxRetry: 2,
+    fragLoadingTimeOut: 20000,
+    fragLoadingMaxRetry: 2,
+  };
+}
+
+function destroyHls(hls: Hls | null) {
+  try {
+    hls?.destroy();
+  } catch {
+    // Already torn down.
+  }
+}
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -75,7 +110,19 @@ export function Player({
   const router = useRouter();
   const rootRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const backHlsRef = useRef<Hls | null>(null);
+  const liveFrontRef = useRef<"a" | "b">("a");
+  const [liveFront, setLiveFront] = useState<"a" | "b">("a");
+  const renewTimer = useRef<number | null>(null);
+  const warming = useRef(false);
+  const liveStarted = useRef(false);
+  const renewArmed = useRef(false);
+  const renewFailures = useRef(0);
+  const renewGen = useRef(0);
+  const livePathRef = useRef("");
+  const warmLiveRef = useRef<() => void>(() => undefined);
   const hideTimer = useRef<number | null>(null);
   const lastTap = useRef<{ t: number; x: number }>({ t: 0, x: 0 });
   const seekBarRef = useRef<HTMLDivElement>(null);
@@ -148,6 +195,102 @@ export function Player({
     }, wait);
     return true;
   }, [live]);
+
+  function shown() {
+    return liveFrontRef.current === "b" ? backRef.current : videoRef.current;
+  }
+
+  function clearRenew() {
+    if (renewTimer.current != null) window.clearTimeout(renewTimer.current);
+    renewTimer.current = null;
+  }
+
+  function armRenew() {
+    if (!live) return;
+    clearRenew();
+    renewArmed.current = true;
+    renewTimer.current = window.setTimeout(() => warmLiveRef.current(), LIVE_RENEW_MS);
+  }
+
+  function startStandby(video: HTMLVideoElement, src: string, slot: "a" | "b") {
+    const slotRef = slot === "b" ? backHlsRef : hlsRef;
+    return new Promise<void>((resolve, reject) => {
+      destroyHls(slotRef.current);
+      slotRef.current = null;
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        if (ok) resolve();
+        else reject(new Error("standby"));
+      };
+      const timer = window.setTimeout(() => finish(false), 45_000);
+      video.muted = true;
+      video.addEventListener("playing", () => finish(true), { once: true });
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = src;
+        void video.play().catch(() => finish(false));
+        return;
+      }
+      if (!Hls.isSupported()) {
+        finish(false);
+        return;
+      }
+      const hls = new Hls(liveHlsConfig());
+      slotRef.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR, (_event, info) => {
+        if (info.fatal) finish(false);
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        void video.play().catch(() => finish(false));
+      });
+    });
+  }
+
+  async function warmLive() {
+    if (!live || warming.current) return;
+    const hidden = liveFrontRef.current === "b" ? videoRef.current : backRef.current;
+    const visible = shown();
+    const path = livePathRef.current;
+    if (!hidden || !visible || !path) return;
+    warming.current = true;
+    clearRenew();
+    const generation = renewGen.current;
+    const slot = hidden === backRef.current ? "b" : "a";
+    try {
+      const response = await fetch(path);
+      const data = (await response.json()) as { src?: string };
+      if (!response.ok || !data.src) throw new Error("no src");
+      await startStandby(hidden, data.src, slot);
+      if (generation !== renewGen.current || !liveStarted.current) throw new Error("left");
+      const next = liveFrontRef.current === "a" ? "b" : "a";
+      const oldVideo = next === "b" ? videoRef.current : backRef.current;
+      const oldHls = next === "b" ? hlsRef : backHlsRef;
+      oldVideo?.pause();
+      hidden.muted = visible.muted;
+      hidden.volume = visible.muted ? 0 : visible.volume || 1;
+      liveFrontRef.current = next;
+      setLiveFront(next);
+      destroyHls(oldHls.current);
+      oldHls.current = null;
+      renewFailures.current = 0;
+      armRenew();
+    } catch {
+      if (generation !== renewGen.current) return;
+      renewFailures.current += 1;
+      const wait = Math.min(20_000, 4_000 * renewFailures.current);
+      clearRenew();
+      renewTimer.current = window.setTimeout(() => warmLiveRef.current(), wait);
+    } finally {
+      warming.current = false;
+    }
+  }
+  warmLiveRef.current = () => {
+    void warmLive();
+  };
 
   useEffect(() => {
     liveRefreshCount.current = 0;
@@ -238,6 +381,7 @@ export function Player({
       : live
         ? `/api/watch/live/play?${params.toString()}`
         : `/api/watch/play?${params.toString()}`;
+    if (live) livePathRef.current = path;
 
     fetch(path)
       .then(async (response) => {
@@ -315,29 +459,7 @@ export function Player({
         } else if (Hls.isSupported()) {
           hls = new Hls(
             live
-              ? {
-                  enableWorker: true,
-                  lowLatencyMode: false,
-                  startLevel: -1,
-                  capLevelToPlayerSize: false,
-                  maxBufferLength: 12,
-                  maxMaxBufferLength: 24,
-                  maxBufferSize: 12 * 1000 * 1000,
-                  backBufferLength: 0,
-                  liveSyncDurationCount: 2,
-                  liveMaxLatencyDurationCount: 6,
-                  liveDurationInfinity: true,
-                  maxLiveSyncPlaybackRate: 1,
-                  highBufferWatchdogPeriod: 2,
-                  maxBufferHole: 0.5,
-                  nudgeMaxRetry: 3,
-                  forceKeyFrameOnDiscontinuity: true,
-                  startFragPrefetch: true,
-                  manifestLoadingTimeOut: 8000,
-                  manifestLoadingMaxRetry: 2,
-                  fragLoadingTimeOut: 20000,
-                  fragLoadingMaxRetry: 2,
-                }
+              ? liveHlsConfig()
               : {
                   enableWorker: true,
                   startLevel: -1,
@@ -407,6 +529,10 @@ export function Player({
                 hls.recoverMediaError();
                 return;
               }
+              if (liveStarted.current) {
+                warmLiveRef.current();
+                return;
+              }
               if (scheduleLiveRefresh()) return;
               setLoading(false);
               setBuffering(false);
@@ -465,16 +591,30 @@ export function Player({
     return () => {
       stop = true;
       suppressMediaError.current = true;
+      liveStarted.current = false;
+      renewArmed.current = false;
+      renewGen.current += 1;
+      clearRenew();
+      destroyHls(hls);
+      destroyHls(hlsRef.current);
+      destroyHls(backHlsRef.current);
       hlsRef.current = null;
-      hls?.destroy();
+      backHlsRef.current = null;
+      liveFrontRef.current = "a";
+      setLiveFront("a");
       video.removeAttribute("src");
       video.load();
+      const back = backRef.current;
+      if (back) {
+        back.removeAttribute("src");
+        back.load();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver, playPath, scheduleLiveRefresh]);
 
   useEffect(() => {
-    const video = videoRef.current;
+    const video = liveFront === "b" ? backRef.current : videoRef.current;
     if (!video) return;
 
     const onPlay = () => {
@@ -488,12 +628,17 @@ export function Player({
       setPlaying(false);
       showControls(true);
     };
-    const onWaiting = () => setBuffering(true);
+    const onWaiting = () => {
+      if (warming.current) return;
+      setBuffering(true);
+    };
     const onPlaying = () => {
       setLoading(false);
       setBuffering(false);
       suppressMediaError.current = false;
       if (!live) return;
+      liveStarted.current = true;
+      if (!renewArmed.current) armRenew();
       if (liveHealthyTimer.current) window.clearTimeout(liveHealthyTimer.current);
       liveHealthyTimer.current = window.setTimeout(() => {
         liveRefreshCount.current = 0;
@@ -512,6 +657,10 @@ export function Player({
     };
     const onError = () => {
       if (suppressMediaError.current) return;
+      if (live && liveStarted.current) {
+        warmLiveRef.current();
+        return;
+      }
       if (live && scheduleLiveRefresh()) return;
       setLoading(false);
       setBuffering(false);
@@ -538,12 +687,12 @@ export function Player({
       video.removeEventListener("volumechange", onVolume);
       video.removeEventListener("error", onError);
     };
-  }, [showControls, live, scheduleLiveRefresh]);
+  }, [showControls, live, liveFront, scheduleLiveRefresh]);
 
   useEffect(() => {
     if (live) return;
     const timer = window.setInterval(() => {
-      const video = videoRef.current;
+      const video = liveFront === "b" ? backRef.current : videoRef.current;
       if (!video || !video.duration) return;
       saveProgress({
         kind,
@@ -569,7 +718,7 @@ export function Player({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      const video = videoRef.current;
+      const video = liveFront === "b" ? backRef.current : videoRef.current;
       if (!video) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
@@ -679,7 +828,7 @@ export function Player({
   }, [showControls, tv, live, back, menu, router, controls, playing, needsUnmute, englishPrompt, status]);
 
   function skipBy(delta: number) {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta));
     setSkipFlash(delta < 0 ? -10 : 10);
@@ -688,7 +837,7 @@ export function Player({
   }
 
   function togglePlay() {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
@@ -696,7 +845,7 @@ export function Player({
   }
 
   function toggleMute() {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     video.muted = !video.muted;
     if (!video.muted) {
@@ -708,7 +857,7 @@ export function Player({
   }
 
   function enableSound() {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     video.muted = false;
     video.volume = 1;
@@ -720,7 +869,7 @@ export function Player({
   }
 
   function setVol(value: number) {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     video.volume = value;
     video.muted = value === 0;
@@ -728,7 +877,7 @@ export function Player({
   }
 
   function seekRatio(ratio: number) {
-    const video = videoRef.current;
+    const video = shown();
     if (!video || !video.duration) return;
     video.currentTime = Math.max(0, Math.min(1, ratio)) * video.duration;
     showControls();
@@ -750,7 +899,7 @@ export function Player({
   }
 
   function applySpeed(value: number) {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     video.playbackRate = value;
     setSpeed(value);
@@ -759,7 +908,7 @@ export function Player({
   }
 
   function applyQuality(index: number) {
-    const hls = hlsRef.current;
+    const hls = liveFrontRef.current === "b" ? backHlsRef.current : hlsRef.current;
     if (!hls) return;
     hls.currentLevel = index;
     setQuality(index);
@@ -804,7 +953,7 @@ export function Player({
   }
 
   function resume(fromSaved: boolean) {
-    const video = videoRef.current;
+    const video = shown();
     if (!video) return;
     if (fromSaved && resumeAt) video.currentTime = resumeAt;
     else {
@@ -841,7 +990,18 @@ export function Player({
           ref={videoRef}
           playsInline
           autoPlay
-          className="h-full w-full bg-black object-contain"
+          className={`absolute inset-0 h-full w-full bg-black object-contain ${
+            live && liveFront === "b" ? "pointer-events-none opacity-0" : ""
+          }`}
+          controls={false}
+        />
+        <video
+          ref={backRef}
+          playsInline
+          muted
+          className={`absolute inset-0 h-full w-full bg-black object-contain ${
+            liveFront === "b" ? "" : "pointer-events-none opacity-0"
+          }`}
           controls={false}
         />
 
