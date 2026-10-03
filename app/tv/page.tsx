@@ -6,6 +6,7 @@ import { AccountGate, rememberCatalogTab, SiteNav } from "@/components/account";
 import { armLiveSound, LiveStage } from "@/components/live-stage";
 import { channelInitial, ChannelFace, LetterBar, useLiveGroups } from "@/components/tv/live-catalog";
 import { TvLiveBrowse } from "@/components/tv/tv-live";
+import { useCopy } from "@/components/locale";
 import { useTvMode } from "@/hooks/use-tv-mode";
 
 export default function TvPage() {
@@ -27,6 +28,7 @@ function TvPageBody() {
 }
 
 function MobileLive() {
+  const copy = useCopy();
   const params = useSearchParams();
   const { groups, loading, filling, status } = useLiveGroups();
   const [query, setQuery] = useState(params.get("q") || "");
@@ -93,7 +95,7 @@ function MobileLive() {
             <span className="tv-live-dot h-1.5 w-1.5 rounded-full bg-[#e50914]" />
             DIRECT
           </p>
-          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">TV Live</h1>
+          <h1 className="mt-1 text-3xl font-bold sm:text-4xl">{copy.live}</h1>
           <p className="mt-2 text-sm text-zinc-400">
             {loading
               ? "Chargement des chaînes…"

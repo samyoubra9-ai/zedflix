@@ -16,6 +16,7 @@ import {
   IconUser,
 } from "./icons";
 import { PlayerSkeleton, ShellSkeleton } from "./loading";
+import { LanguageSwitch, useCopy } from "@/components/locale";
 import { useTvMode } from "@/hooks/use-tv-mode";
 import { TvShell } from "@/components/tv/tv-shell";
 
@@ -351,6 +352,7 @@ function linkActive(pathname: string, href: string) {
 export function SiteNav() {
   const pathname = usePathname();
   const router = useRouter();
+  const copy = useCopy();
   const { profile, email } = useSession();
   const tv = useTvMode();
   const [open, setOpen] = useState(false);
@@ -395,6 +397,8 @@ export function SiteNav() {
   }
 
   const access = catalogAccessOf(profile);
+  const labelOf = (href: string) =>
+    href === "/browse" ? copy.films : href === "/anime" ? copy.anime : href === "/tv" ? copy.live : href === "/list" ? copy.list : copy.search;
   const links = LINKS.filter((link) => catalogAllowsPath(link.href, access));
   const desktopLinks = links.filter((link) => link.href !== "/search");
 
@@ -413,7 +417,7 @@ export function SiteNav() {
           </Link>
 
           <nav className="ml-2 hidden items-center gap-5 md:flex">
-            {desktopLinks.map(({ href, label }) => (
+            {desktopLinks.map(({ href }) => (
               <Link
                 key={href}
                 href={href}
@@ -421,7 +425,7 @@ export function SiteNav() {
                   linkActive(pathname, href) ? "font-semibold text-white" : "text-zinc-400 hover:text-white"
                 }`}
               >
-                {label}
+                {labelOf(href)}
               </Link>
             ))}
             <Link
@@ -430,11 +434,12 @@ export function SiteNav() {
                 linkActive(pathname, "/search") ? "font-semibold text-white" : "text-zinc-400 hover:text-white"
               }`}
             >
-              Recherche
+              {copy.search}
             </Link>
           </nav>
 
-          <div className="relative ml-auto" ref={menuRef}>
+          <div className="relative ml-auto flex items-center gap-2" ref={menuRef}>
+            <LanguageSwitch />
             <button
               type="button"
               onClick={() => setOpen((value) => !value)}
@@ -473,7 +478,7 @@ export function SiteNav() {
                   className="flex items-center gap-2 px-3 py-2.5 text-sm text-zinc-200 hover:bg-white/5"
                 >
                   <IconList className="h-4 w-4" />
-                  Ma liste
+                  {copy.list}
                 </Link>
                 <Link
                   href="/account"
@@ -481,7 +486,7 @@ export function SiteNav() {
                   className="flex items-center gap-2 px-3 py-2.5 text-sm text-zinc-200 hover:bg-white/5"
                 >
                   <IconSettings className="h-4 w-4" />
-                  Compte & sécurité
+                  {copy.account}
                 </Link>
                 <button
                   type="button"
@@ -489,7 +494,7 @@ export function SiteNav() {
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-zinc-200 hover:bg-white/5"
                 >
                   <IconSwitch className="h-4 w-4" />
-                  Changer de profil
+                  {copy.switchProfile}
                 </button>
                 <button
                   type="button"
@@ -497,7 +502,7 @@ export function SiteNav() {
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 hover:bg-white/5"
                 >
                   <IconLogout className="h-4 w-4" />
-                  Se déconnecter
+                  {copy.logout}
                 </button>
               </div>
             ) : null}
@@ -513,7 +518,7 @@ export function SiteNav() {
           className="grid h-[3.75rem]"
           style={{ gridTemplateColumns: `repeat(${Math.max(links.length, 1)}, minmax(0, 1fr))` }}
         >
-          {links.map(({ href, label, Icon }) => {
+          {links.map(({ href, Icon }) => {
             const active = linkActive(pathname, href);
             return (
               <Link
@@ -528,7 +533,7 @@ export function SiteNav() {
                 >
                   <Icon className="h-5 w-5" />
                 </span>
-                {label}
+                {labelOf(href)}
               </Link>
             );
           })}

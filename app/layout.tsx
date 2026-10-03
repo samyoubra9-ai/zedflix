@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
+import { LocaleProvider } from "@/components/locale";
 import { Pwa } from "@/components/pwa";
+import { parseSiteLang } from "@/lib/locale";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -39,15 +42,17 @@ export const viewport: Viewport = {
   themeColor: "#050505",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const jar = await cookies();
+  const lang = parseSiteLang(jar.get("minuit_lang")?.value);
   return (
     <html
-      lang="fr"
+      lang={lang}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col overflow-x-hidden bg-[#050505] text-white">
         <Pwa />
-        {children}
+        <LocaleProvider lang={lang}>{children}</LocaleProvider>
       </body>
     </html>
   );

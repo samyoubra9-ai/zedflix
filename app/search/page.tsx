@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { AccountGate, SiteNav, currentCatalogTab, type CatalogTab } from "@/components/account";
+import { useCopy, useSiteLang } from "@/components/locale";
 import { IconSearch } from "@/components/icons";
 import { useOpenDetail } from "@/components/detail";
 import { Poster, PosterGrid } from "@/components/posters";
@@ -20,12 +21,14 @@ export default function SearchPage() {
 
 function Search() {
   const router = useRouter();
+  const copy = useCopy();
+  const lang = useSiteLang();
   const [tab, setTab] = useState<CatalogTab>("stream");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Poster[]>([]);
   const [people, setPeople] = useState<PersonHit[]>([]);
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("Cherche un titre.");
+  const [status, setStatus] = useState(copy.searchHintFilm);
   const [notice, setNotice] = useState("");
   const [canRetry, setCanRetry] = useState(false);
   const openDetail = useOpenDetail();
@@ -35,29 +38,28 @@ function Search() {
   useEffect(() => {
     const current = currentCatalogTab();
     setTab(current);
-    setStatus(current === "anime" ? "Cherche un animé." : current === "live" ? "Cherche une chaîne." : "Cherche un film ou une série.");
+    setStatus(current === "anime" ? copy.searchHintAnime : current === "live" ? copy.searchHintLive : copy.searchHintFilm);
   }, []);
 
   async function openItem(item: Poster) {
-    const direct = item.id && !item.id.startsWith("m-") && !item.id.startsWith("a-");
-    if (direct) {
+    if (item.id) {
       openDetail(item);
       return;
     }
-    setNotice("Ouverture…");
+    setNotice(copy.opening);
     try {
       const response = await fetch(`/api/watch/search?q=${encodeURIComponent(item.title)}&match=1`, {
         signal: AbortSignal.timeout(8000),
       });
       const data = (await response.json()) as { result?: Poster; error?: string };
       if (!response.ok || !data.result?.id) {
-        setNotice("Pas encore disponible à la lecture");
+        setNotice(copy.notPlayable);
         return;
       }
       setNotice("");
       openDetail(data.result);
     } catch {
-      setNotice("Pas encore disponible à la lecture");
+      setNotice(copy.notPlayable);
     }
   }
 
@@ -90,15 +92,15 @@ function Search() {
       if (id !== requestId.current) return;
       if (!response.ok) {
         setCanRetry(true);
-        setNotice(data.error || "Recherche impossible. Réessaie.");
+        setNotice(data.error || copy.searchFailed);
         return;
       }
       const primary = data.results || [];
       setItems(primary);
       setPeople(tab === "anime" ? [] : data.people || []);
       setLoading(false);
-      setStatus(primary.length || data.people?.length ? "" : "Aucun résultat.");
-      if (tab === "anime") return;
+      setStatus(primary.length || data.people?.length ? "" : copy.noResults);
+      if (tab === "anime" || lang === "en") return;
       try {
         const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`, {
           signal: AbortSignal.timeout(8000),
@@ -117,7 +119,7 @@ function Search() {
     } catch {
       if (id !== requestId.current) return;
       setCanRetry(true);
-      setNotice("Recherche impossible. Réessaie.");
+      setNotice(copy.searchFailed);
     } finally {
       window.clearTimeout(timer);
       if (id === requestId.current) setLoading(false);
@@ -127,14 +129,14 @@ function Search() {
   return (
     <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
-      <h1 className="text-3xl font-bold sm:text-4xl">Recherche</h1>
+      <h1 className="text-3xl font-bold sm:text-4xl">{copy.search}</h1>
       <form id="catalog-search" onSubmit={onSubmit} className="mt-6 flex max-w-2xl gap-2 sm:mt-8 sm:gap-3">
         <div className="relative min-w-0 flex-1">
           <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={tab === "anime" ? "Un animé" : tab === "live" ? "Une chaîne" : "Un film ou une série"}
+            placeholder={tab === "anime" ? copy.searchAnime : tab === "live" ? copy.searchLive : copy.searchFilm}
             className="h-12 w-full rounded-lg bg-zinc-900 pl-10 pr-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
           />
         </div>
@@ -149,13 +151,13 @@ function Search() {
         {loading ? (
           <div className="flex items-center gap-3 text-sm text-zinc-300">
             <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-white/15 border-t-[#e50914]" />
-            Recherche…
+            {copy.searching}
           </div>
         ) : null}
 
         {people.length ? (
           <section>
-            <h2 className="mb-4 text-lg font-semibold sm:text-xl">Acteurs</h2>
+            <h2 className="mb-4 text-lg font-semibold sm:text-xl">{copy.actors}</h2>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {people.map((person) => (
                 <li key={person.id}>
@@ -165,7 +167,7 @@ function Search() {
                   >
                     <span>
                       <span className="block font-medium">{person.name}</span>
-                      <span className="text-xs text-zinc-400">{person.count}+ titres</span>
+                      <span className="text-xs text-zinc-400">{person.count}+ {copy.titles}</span>
                     </span>
                     <span className="text-sm text-zinc-400">→</span>
                   </Link>

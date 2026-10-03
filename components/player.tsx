@@ -3,6 +3,7 @@
 import Hls, { type Level } from "hls.js";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { flushSync } from "react-dom";
 import {
   IconBack,
   IconCheck,
@@ -21,16 +22,18 @@ import {
   getProgress,
   saveProgress,
 } from "@/lib/watch-progress";
+import { useCopy } from "@/components/locale";
 import { useTvMode } from "@/hooks/use-tv-mode";
 import { TvSpatialNav } from "@/components/tv/spatial-nav";
 import { useRouter } from "next/navigation";
 
 type QualityOption = { index: number; label: string };
-type Menu = null | "root" | "speed" | "quality" | "server";
+type Menu = null | "root" | "speed" | "quality" | "server" | "langue";
 type ServerOption = { id: string; label: string; version: "vf" | "vo" | "vostfr" };
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const LIVE_RENEW_MS = 210_000;
+const VOD_START_MS = 12_000;
 
 function liveHlsConfig() {
   return {
@@ -106,6 +109,7 @@ export function Player({
   onClose?: () => void;
 }) {
   const kind = live ? "movie" : episode ? "show" : "movie";
+  const copy = useCopy();
   const tv = useTvMode();
   const router = useRouter();
   const rootRef = useRef<HTMLElement>(null);
@@ -121,13 +125,15 @@ export function Player({
   const renewArmed = useRef(false);
   const renewFailures = useRef(0);
   const renewGen = useRef(0);
+  const swapping = useRef(false);
+  const userPaused = useRef(false);
   const livePathRef = useRef("");
   const warmLiveRef = useRef<() => void>(() => undefined);
   const hideTimer = useRef<number | null>(null);
   const lastTap = useRef<{ t: number; x: number }>({ t: 0, x: 0 });
   const seekBarRef = useRef<HTMLDivElement>(null);
 
-  const [title, setTitle] = useState(episode ? `Épisode ${episode}` : "Lecture");
+  const [title, setTitle] = useState(episode ? `${copy.episode} ${episode}` : copy.play);
   const [poster, setPoster] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
@@ -154,11 +160,21 @@ export function Player({
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [activeServer, setActiveServer] = useState<string | null>(null);
   const [preferredServer, setPreferredServer] = useState<string | null>(null);
-  const [allowEnglish, setAllowEnglish] = useState(false);
+  const [allowEnglish, setAllowEnglish] = useState(() => id.startsWith("en-"));
+  const [audioLang, setAudioLang] = useState<"fr" | "en">(() => (id.startsWith("en-") ? "en" : "fr"));
   const [englishPrompt, setEnglishPrompt] = useState(false);
   const [needsUnmute, setNeedsUnmute] = useState(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const serversRef = useRef<ServerOption[]>([]);
+  const triedServers = useRef<Set<string>>(new Set());
+  const audioLangRef = useRef<"fr" | "en">("fr");
+  const activeServerRef = useRef<string | null>(null);
+  const vodStarted = useRef(false);
+  const failoverLock = useRef(false);
+  serversRef.current = servers;
+  audioLangRef.current = audioLang;
+  activeServerRef.current = activeServer;
 
   const showControls = useCallback((sticky = false) => {
     setControls(true);
@@ -212,7 +228,7 @@ export function Player({
     renewTimer.current = window.setTimeout(() => warmLiveRef.current(), LIVE_RENEW_MS);
   }
 
-  function startStandby(video: HTMLVideoElement, src: string, slot: "a" | "b") {
+  function bufferStandby(video: HTMLVideoElement, src: string, slot: "a" | "b") {
     const slotRef = slot === "b" ? backHlsRef : hlsRef;
     return new Promise<void>((resolve, reject) => {
       destroyHls(slotRef.current);
@@ -226,11 +242,13 @@ export function Player({
         else reject(new Error("standby"));
       };
       const timer = window.setTimeout(() => finish(false), 45_000);
+      // Stay paused so the video on screen keeps playing while this one fills.
       video.muted = true;
-      video.addEventListener("playing", () => finish(true), { once: true });
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.pause();
+      if (video.canPlayType("application/vnd.apple.mpegurl") && !Hls.isSupported()) {
+        video.addEventListener("canplay", () => finish(true), { once: true });
         video.src = src;
-        void video.play().catch(() => finish(false));
+        video.load();
         return;
       }
       if (!Hls.isSupported()) {
@@ -244,10 +262,29 @@ export function Player({
       hls.on(Hls.Events.ERROR, (_event, info) => {
         if (info.fatal) finish(false);
       });
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => finish(false));
-      });
+      hls.on(Hls.Events.FRAG_BUFFERED, () => finish(true));
     });
+  }
+
+  async function playStandby(video: HTMLVideoElement, wantMuted: boolean, wantVolume: number) {
+    video.muted = true;
+    video.volume = wantVolume;
+    await video.play();
+    if (wantMuted) return;
+    video.muted = false;
+    video.volume = wantVolume;
+    if (video.paused) await video.play();
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+    if (!video.paused && !video.muted) {
+      setMuted(false);
+      setNeedsUnmute(false);
+      setVolume(video.volume || 1);
+      return;
+    }
+    video.muted = true;
+    setMuted(true);
+    setNeedsUnmute(true);
+    if (video.paused) await video.play();
   }
 
   async function warmLive() {
@@ -258,33 +295,62 @@ export function Player({
     if (!hidden || !visible || !path) return;
     warming.current = true;
     clearRenew();
+    setPlaying(true);
     const generation = renewGen.current;
     const slot = hidden === backRef.current ? "b" : "a";
     try {
       const response = await fetch(path);
       const data = (await response.json()) as { src?: string };
       if (!response.ok || !data.src) throw new Error("no src");
-      await startStandby(hidden, data.src, slot);
+      await bufferStandby(hidden, data.src, slot);
       if (generation !== renewGen.current || !liveStarted.current) throw new Error("left");
       const next = liveFrontRef.current === "a" ? "b" : "a";
       const oldVideo = next === "b" ? videoRef.current : backRef.current;
       const oldHls = next === "b" ? hlsRef : backHlsRef;
+      const wantMuted = visible.muted;
+      const wantVolume = visible.muted ? 0 : visible.volume || 1;
+      swapping.current = true;
+      flushSync(() => {
+        liveFrontRef.current = next;
+        setLiveFront(next);
+        setPlaying(true);
+      });
+      await playStandby(hidden, wantMuted, wantVolume);
+      if (hidden.paused) throw new Error("paused");
       oldVideo?.pause();
-      hidden.muted = visible.muted;
-      hidden.volume = visible.muted ? 0 : visible.volume || 1;
-      liveFrontRef.current = next;
-      setLiveFront(next);
       destroyHls(oldHls.current);
       oldHls.current = null;
+      setPlaying(true);
+      setLoading(false);
+      setBuffering(false);
       renewFailures.current = 0;
       armRenew();
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
     } catch {
       if (generation !== renewGen.current) return;
+      if (swapping.current) {
+        const front = liveFrontRef.current;
+        const other = front === "b" ? "a" : "b";
+        const otherHls = other === "b" ? backHlsRef.current : hlsRef.current;
+        const otherVideo = other === "b" ? backRef.current : videoRef.current;
+        const failedVideo = front === "b" ? backRef.current : videoRef.current;
+        if (otherHls && otherVideo) {
+          flushSync(() => {
+            liveFrontRef.current = other;
+            setLiveFront(other);
+            setPlaying(true);
+          });
+          failedVideo?.pause();
+          void otherVideo.play().catch(() => undefined);
+          setNeedsUnmute(false);
+        }
+      }
       renewFailures.current += 1;
       const wait = Math.min(20_000, 4_000 * renewFailures.current);
       clearRenew();
       renewTimer.current = window.setTimeout(() => warmLiveRef.current(), wait);
     } finally {
+      swapping.current = false;
       warming.current = false;
     }
   }
@@ -308,6 +374,10 @@ export function Player({
     setPreferredServer(null);
     setActiveServer(null);
     setServers([]);
+    serversRef.current = [];
+    activeServerRef.current = null;
+    triedServers.current = new Set();
+    failoverLock.current = false;
     setAllowEnglish(false);
     setEnglishPrompt(false);
   }, [id, episode]);
@@ -342,20 +412,93 @@ export function Player({
     }
   }, [kind, id, episode, reloadKey, live]);
 
+  useEffect(() => {
+    const englishCatalog = id.startsWith("en-");
+    setAudioLang(englishCatalog ? "en" : "fr");
+    setPreferredServer(null);
+    setAllowEnglish(englishCatalog);
+  }, [id, episode]);
+
+  function serversFor(language: "fr" | "en") {
+    return servers.filter((item) => (language === "en" ? item.version !== "vf" : item.version === "vf"));
+  }
+
+  function pickLanguage(next: "fr" | "en") {
+    const list = serversFor(next);
+    if (!list.length) {
+      setMenu(null);
+      return;
+    }
+    setAudioLang(next);
+    setEnglishPrompt(false);
+    setStatus("");
+    const current = list.find((item) => item.id === activeServer);
+    if (!current) {
+      const first = list[0];
+      triedServers.current = new Set();
+      failoverLock.current = false;
+      setPreferredServer(first.id);
+      setActiveServer(first.id);
+      setAllowEnglish(first.version !== "vf");
+      setLoading(true);
+    }
+    setMenu(list.length > 1 ? "server" : null);
+  }
+
   const switchServer = useCallback((next: string) => {
     if (!next || next === activeServer) {
       setMenu(null);
       return;
     }
     const option = servers.find((item) => item.id === next);
+    triedServers.current = new Set();
+    failoverLock.current = false;
     setPreferredServer(next);
     setActiveServer(next);
     setAllowEnglish(option?.version !== "vf");
+    setAudioLang(option?.version === "vf" ? "fr" : "en");
     setEnglishPrompt(false);
     setMenu(null);
     setStatus("");
     setLoading(true);
   }, [activeServer, servers]);
+
+  const failToNextServer = useCallback(() => {
+    if (live || failoverLock.current) return;
+    const current = activeServerRef.current;
+    if (current) triedServers.current.add(current);
+    const list = serversRef.current.filter((item) =>
+      audioLangRef.current === "en" ? item.version !== "vf" : item.version === "vf",
+    );
+    const start = list.findIndex((item) => item.id === current);
+    const ordered = start >= 0 ? [...list.slice(start + 1), ...list.slice(0, start)] : list;
+    const next = ordered.find((item) => !triedServers.current.has(item.id));
+    if (!next) {
+      failoverLock.current = true;
+      suppressMediaError.current = true;
+      destroyHls(hlsRef.current);
+      hlsRef.current = null;
+      const video = videoRef.current;
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      setPlaying(false);
+      setBuffering(false);
+      setLoading(false);
+      setStatus(copy.playbackFailed);
+      return;
+    }
+    failoverLock.current = true;
+    activeServerRef.current = next.id;
+    setPreferredServer(next.id);
+    setActiveServer(next.id);
+    setAllowEnglish(next.version !== "vf");
+    setStatus("");
+    setLoading(true);
+    setBuffering(false);
+  }, [live, copy.playbackFailed]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -364,12 +507,25 @@ export function Player({
     setStatus("");
     setBuffering(false);
     setPlaying(false);
+    userPaused.current = false;
     setQualities([]);
     setQuality(-1);
     let hls: Hls | null = null;
     let stop = false;
     let mediaRecovered = false;
+    let startTimer = 0;
+    failoverLock.current = false;
+    vodStarted.current = false;
     setEnglishPrompt(false);
+    const watchStart = () => {
+      if (live) return;
+      window.clearTimeout(startTimer);
+      startTimer = window.setTimeout(() => {
+        if (stop || vodStarted.current) return;
+        if (video.readyState >= 2 || video.buffered.length > 0) return;
+        failToNextServer();
+      }, VOD_START_MS);
+    };
     const params = new URLSearchParams({ id });
     if (!live) {
       if (episode) params.set("episode", String(episode));
@@ -398,7 +554,10 @@ export function Player({
         if (stop) return;
         if (live && data.title) setTitle(data.title);
         if (live && data.poster) setPoster(data.poster);
-        if (!live && Array.isArray(data.servers)) setServers(data.servers);
+        if (!live && Array.isArray(data.servers)) {
+          serversRef.current = data.servers;
+          setServers(data.servers);
+        }
         if (!live && data.needsEnglishChoice) {
           setLoading(false);
           setEnglishPrompt(true);
@@ -407,11 +566,24 @@ export function Player({
         }
         if (!response.ok || !data.src) {
           if (!stop && scheduleLiveRefresh()) return;
+          if (!live && preferredServer && serversRef.current.length) {
+            failToNextServer();
+            return;
+          }
           setLoading(false);
-          setStatus(live ? "La chaîne ne répond plus." : data.error || "Lecture impossible");
+          setStatus(live ? copy.channelDown : data.error || copy.playbackFailed);
           return;
         }
-        if (data.server) setActiveServer(data.server);
+        if (data.server) {
+          if (preferredServer && data.server !== preferredServer) triedServers.current.add(preferredServer);
+          if (triedServers.current.has(data.server)) {
+            activeServerRef.current = preferredServer || data.server;
+            failToNextServer();
+            return;
+          }
+          activeServerRef.current = data.server;
+          setActiveServer(data.server);
+        }
 
         const onLevels = (levels: Level[]) => {
           const options = levels
@@ -423,40 +595,7 @@ export function Player({
           setQualities(options);
         };
 
-        if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = data.src;
-          if (!live) {
-            const pickNativeFrench = () => {
-              const tracks = (video as HTMLVideoElement & {
-                audioTracks?: {
-                  length: number;
-                  [index: number]: { language?: string; label?: string; enabled: boolean };
-                };
-              }).audioTracks;
-              if (!tracks || !tracks.length) return;
-              let frenchIndex = -1;
-              for (let index = 0; index < tracks.length; index += 1) {
-                const track = tracks[index];
-                const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
-                const isFrench =
-                  hay.startsWith("fr") ||
-                  hay.includes("french") ||
-                  hay.includes("fran") ||
-                  hay.includes("vf");
-                if (isFrench && frenchIndex < 0) frenchIndex = index;
-              }
-              if (frenchIndex >= 0) {
-                for (let index = 0; index < tracks.length; index += 1) {
-                  tracks[index].enabled = index === frenchIndex;
-                }
-              } else if (allowEnglish || tracks.length === 1) {
-                tracks[0].enabled = true;
-              }
-              // If nothing matched, leave browser defaults — never mute all tracks.
-            };
-            video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
-          }
-        } else if (Hls.isSupported()) {
+        if (Hls.isSupported()) {
           hls = new Hls(
             live
               ? liveHlsConfig()
@@ -504,20 +643,26 @@ export function Player({
                 }
               }
             }
-            // Live IPTV is usually muxed A/V — don't retarget audio tracks (cuts sound).
-            if (!live) {
-              const tracks = hls?.audioTracks || [];
-              const french = tracks.findIndex((track) => {
-                const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
-                return (
-                  hay.startsWith("fr") ||
-                  hay.includes("french") ||
-                  hay.includes("fran") ||
-                  hay.includes("vf") ||
-                  hay.includes("truefrench")
-                );
+            // Pick the language after the manifest finishes starting. Doing it
+            // here cancels the video request and the film never starts.
+            if (!live && hls) {
+              const player = hls;
+              const wantEnglish = id.startsWith("en-");
+              queueMicrotask(() => {
+                if (stop || hlsRef.current !== player) return;
+                const tracks = player.audioTracks || [];
+                const chosen = tracks.findIndex((track) => {
+                  const hay = `${track.lang || ""} ${track.name || ""}`.toLowerCase();
+                  return wantEnglish
+                    ? hay.startsWith("en") || hay.includes("english") || hay.includes("eng")
+                    : hay.startsWith("fr") ||
+                        hay.includes("french") ||
+                        hay.includes("fran") ||
+                        hay.includes("vf") ||
+                        hay.includes("truefrench");
+                });
+                if (chosen >= 0) player.audioTrack = chosen;
               });
-              if (french >= 0 && hls) hls.audioTrack = french;
             }
           });
           hls.on(Hls.Events.LEVEL_SWITCHED, (_event, info) => setQuality(info.level));
@@ -530,7 +675,7 @@ export function Player({
                 return;
               }
               if (liveStarted.current) {
-                warmLiveRef.current();
+                if (!warming.current && !swapping.current) warmLiveRef.current();
                 return;
               }
               if (scheduleLiveRefresh()) return;
@@ -539,24 +684,66 @@ export function Player({
               setStatus("La chaîne ne répond plus.");
               return;
             }
-            if (info.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            if (!vodStarted.current) {
+              if (!mediaRecovered) {
+                mediaRecovered = true;
+                if (info.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+                else hls.recoverMediaError();
+                return;
+              }
+              failToNextServer();
+              return;
+            }
+            if (info.type === Hls.ErrorTypes.NETWORK_ERROR && !mediaRecovered) {
+              mediaRecovered = true;
               hls.startLoad();
               return;
             }
-            if (info.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            if (info.type === Hls.ErrorTypes.MEDIA_ERROR && !mediaRecovered) {
+              mediaRecovered = true;
               hls.recoverMediaError();
               return;
             }
-            setLoading(false);
-            setBuffering(false);
-            setStatus("Le lecteur n’a pas pu lire la vidéo.");
+            failToNextServer();
           });
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          video.src = data.src;
+          if (!live) {
+            const pickNativeFrench = () => {
+              const tracks = (video as HTMLVideoElement & {
+                audioTracks?: {
+                  length: number;
+                  [index: number]: { language?: string; label?: string; enabled: boolean };
+                };
+              }).audioTracks;
+              if (!tracks || !tracks.length) return;
+              const wantEnglish = id.startsWith("en-");
+              let chosen = -1;
+              for (let index = 0; index < tracks.length; index += 1) {
+                const track = tracks[index];
+                const hay = `${track.language || ""} ${track.label || ""}`.toLowerCase();
+                const match = wantEnglish
+                  ? hay.startsWith("en") || hay.includes("english") || hay.includes("eng")
+                  : hay.startsWith("fr") || hay.includes("french") || hay.includes("fran") || hay.includes("vf");
+                if (match && chosen < 0) chosen = index;
+              }
+              if (chosen >= 0) {
+                for (let index = 0; index < tracks.length; index += 1) {
+                  tracks[index].enabled = index === chosen;
+                }
+              } else if (allowEnglish || tracks.length === 1) {
+                tracks[0].enabled = true;
+              }
+            };
+            video.addEventListener("loadedmetadata", pickNativeFrench, { once: true });
+          }
         } else {
           setLoading(false);
           setStatus("Ce navigateur ne lit pas ce format.");
           return;
         }
 
+        watchStart();
         video.muted = false;
         video.volume = 1;
         setMuted(false);
@@ -582,14 +769,19 @@ export function Player({
       })
       .catch(() => {
         if (!stop && scheduleLiveRefresh()) return;
+        if (!stop && !live && preferredServer && serversRef.current.length) {
+          failToNextServer();
+          return;
+        }
         if (!stop) {
           setLoading(false);
-          setStatus(live ? "La chaîne ne répond plus." : "Lecture impossible");
+          setStatus(live ? copy.channelDown : copy.playbackFailed);
         }
       });
 
     return () => {
       stop = true;
+      window.clearTimeout(startTimer);
       suppressMediaError.current = true;
       liveStarted.current = false;
       renewArmed.current = false;
@@ -611,7 +803,7 @@ export function Player({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver, playPath, scheduleLiveRefresh]);
+  }, [id, episode, reloadKey, preferredServer, allowEnglish, live, saver, playPath, scheduleLiveRefresh, failToNextServer]);
 
   useEffect(() => {
     const video = liveFront === "b" ? backRef.current : videoRef.current;
@@ -625,6 +817,7 @@ export function Player({
       showControls();
     };
     const onPause = () => {
+      if (live && !userPaused.current && (swapping.current || warming.current)) return;
       setPlaying(false);
       showControls(true);
     };
@@ -633,6 +826,7 @@ export function Player({
       setBuffering(true);
     };
     const onPlaying = () => {
+      vodStarted.current = true;
       setLoading(false);
       setBuffering(false);
       suppressMediaError.current = false;
@@ -658,13 +852,18 @@ export function Player({
     const onError = () => {
       if (suppressMediaError.current) return;
       if (live && liveStarted.current) {
-        warmLiveRef.current();
+        if (!warming.current && !swapping.current) warmLiveRef.current();
         return;
       }
       if (live && scheduleLiveRefresh()) return;
+      if (!live) {
+        if (hlsRef.current && !vodStarted.current) return;
+        failToNextServer();
+        return;
+      }
       setLoading(false);
       setBuffering(false);
-      setStatus(live ? "La chaîne ne répond plus." : "Le lecteur n’a pas pu lire la vidéo.");
+      setStatus("La chaîne ne répond plus.");
     };
 
     video.addEventListener("play", onPlay);
@@ -687,7 +886,7 @@ export function Player({
       video.removeEventListener("volumechange", onVolume);
       video.removeEventListener("error", onError);
     };
-  }, [showControls, live, liveFront, scheduleLiveRefresh]);
+  }, [showControls, live, liveFront, scheduleLiveRefresh, failToNextServer]);
 
   useEffect(() => {
     if (live) return;
@@ -801,8 +1000,14 @@ export function Player({
         // Space on a focused TV button activates the button via spatial-nav.
         if (tv && event.key === " " && target?.hasAttribute("data-tv-focus")) return;
         event.preventDefault();
-        if (video.paused) video.play().catch(() => undefined);
-        else video.pause();
+        if (live && (warming.current || swapping.current)) return;
+        if (video.paused) {
+          userPaused.current = false;
+          video.play().catch(() => undefined);
+        } else {
+          userPaused.current = true;
+          video.pause();
+        }
       } else if (!live && event.key === "ArrowRight") {
         event.preventDefault();
         skipBy(10);
@@ -839,8 +1044,14 @@ export function Player({
   function togglePlay() {
     const video = shown();
     if (!video) return;
-    if (video.paused) video.play().catch(() => undefined);
-    else video.pause();
+    if (live && (warming.current || swapping.current)) return;
+    if (video.paused) {
+      userPaused.current = false;
+      video.play().catch(() => undefined);
+    } else {
+      userPaused.current = true;
+      video.pause();
+    }
     showControls();
   }
 
@@ -966,7 +1177,24 @@ export function Player({
   }
 
   function retry() {
+    triedServers.current = new Set();
+    failoverLock.current = false;
+    vodStarted.current = false;
+    const list = serversRef.current.filter((item) =>
+      audioLangRef.current === "en" ? item.version !== "vf" : item.version === "vf",
+    );
+    const first = list[0];
     setStatus("");
+    setLoading(true);
+    if (first) {
+      activeServerRef.current = first.id;
+      setPreferredServer(first.id);
+      setActiveServer(first.id);
+      setAllowEnglish(first.version !== "vf");
+    } else {
+      setPreferredServer(null);
+      setAllowEnglish(false);
+    }
     setReloadKey((value) => value + 1);
   }
 
@@ -1076,13 +1304,13 @@ export function Player({
           </div>
         ) : null}
 
-        {needsUnmute && !live && !loading && !status && !englishPrompt ? (
+        {needsUnmute && !loading && !status && !englishPrompt ? (
           <div data-dialog className="absolute inset-0 z-30 flex items-end justify-center bg-gradient-to-t from-black via-black/50 to-transparent pb-28 sm:items-center sm:pb-0">
             <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl">
               <p className="text-sm text-zinc-400">Son coupé</p>
-              <p className="mt-1 text-lg font-semibold">Activer le son de la chaîne ?</p>
+              <p className="mt-1 text-lg font-semibold">Activer le son ?</p>
               <p className="mt-2 text-sm text-zinc-400">
-                Le navigateur bloque le son au démarrage — appuie sur OK.
+                L’image continue. Le navigateur demande un clic pour le son.
               </p>
               <div className="mt-5 flex gap-3">
                 <button
@@ -1341,14 +1569,25 @@ export function Player({
                               </span>
                             </button>
                           ) : null}
-                          {!live && servers.length > 1 ? (
+                          {!live && servers.some((item) => item.version === "vf") && servers.some((item) => item.version !== "vf") ? (
+                            <button
+                              type="button"
+                              {...(tv ? { "data-tv-focus": true } : {})}
+                              onClick={() => setMenu("langue")}
+                              className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
+                            >
+                              <span>{copy.language}</span>
+                              <span className="text-zinc-400">{audioLang === "en" ? copy.english : copy.french}</span>
+                            </button>
+                          ) : null}
+                          {!live && serversFor(audioLang).length > 1 ? (
                             <button
                               type="button"
                               {...(tv ? { "data-tv-focus": true } : {})}
                               onClick={() => setMenu("server")}
                               className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
                             >
-                              <span>Version</span>
+                              <span>{copy.version}</span>
                               <span className="max-w-[7rem] truncate text-zinc-400">
                                 {servers.find((item) => item.id === activeServer)?.label || "—"}
                               </span>
@@ -1417,6 +1656,29 @@ export function Player({
                           ))}
                         </>
                       ) : null}
+                      {menu === "langue" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setMenu("root")}
+                            className="w-full px-3 py-2 text-left text-xs text-zinc-500"
+                          >
+                            ← {copy.language}
+                          </button>
+                          {(["fr", "en"] as const).map((value) => (
+                            <button
+                              key={value}
+                              type="button"
+                              {...(tv ? { "data-tv-focus": true } : {})}
+                              onClick={() => pickLanguage(value)}
+                              className="tv-focus flex w-full items-center justify-between px-3 py-2.5 text-left text-sm outline-none hover:bg-white/5"
+                            >
+                              <span>{value === "en" ? copy.english : copy.french}</span>
+                              {audioLang === value ? <IconCheck className="h-4 w-4 text-[#e50914]" /> : null}
+                            </button>
+                          ))}
+                        </>
+                      ) : null}
                       {menu === "server" ? (
                         <>
                           <button
@@ -1424,9 +1686,9 @@ export function Player({
                             onClick={() => setMenu("root")}
                             className="w-full px-3 py-2 text-left text-xs text-zinc-500"
                           >
-                            ← Version
+                            ← {audioLang === "en" ? copy.english : copy.version}
                           </button>
-                          {servers.map((item) => (
+                          {serversFor(audioLang).map((item) => (
                             <button
                               key={item.id}
                               type="button"

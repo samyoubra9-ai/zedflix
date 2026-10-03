@@ -5,6 +5,7 @@ import { createContext, ReactNode, useContext, useEffect, useState } from "react
 import { CastRow, MetaChips, type CastGenre, type CastPerson } from "./cast";
 import { IconPlay } from "./icons";
 import { LikeButton, MyListButton } from "./my-list-button";
+import { useCopy } from "./locale";
 import { Spinner } from "./loading";
 import type { Poster } from "./posters";
 
@@ -42,6 +43,7 @@ type Detail = {
 };
 
 function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
+  const copy = useCopy();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [seasonId, setSeasonId] = useState(item.id);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -69,7 +71,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
         const data = (await response.json()) as Detail & { error?: string };
         if (stop) return;
         if (!response.ok) {
-          setStatus(data.error || "Fiche indisponible");
+          setStatus(data.error || copy.sheetUnavailable);
           setLoading(false);
           return;
         }
@@ -80,7 +82,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
       })
       .catch(() => {
         if (!stop) {
-          setStatus("Fiche indisponible");
+          setStatus(copy.sheetUnavailable);
           setLoading(false);
         }
       });
@@ -96,7 +98,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
     const data = (await response.json()) as { episodes?: Episode[]; error?: string };
     setEpisodesLoading(false);
     if (!response.ok) {
-      setStatus(data.error || "Saison introuvable");
+      setStatus(data.error || copy.seasonUnavailable);
       return;
     }
     setEpisodes(data.episodes || []);
@@ -130,7 +132,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
         <button
           type="button"
           onClick={onClose}
-          aria-label="Fermer"
+          aria-label={copy.close}
           className="absolute right-3 top-3 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900/90 text-lg sm:right-5 sm:top-5"
         >
           ×
@@ -142,7 +144,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
           <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-black/20" />
           <div className="absolute bottom-0 left-0 right-0 px-4 pb-6 sm:px-8 sm:pb-8">
             <p className="text-[11px] font-semibold tracking-[0.18em] text-white/75 sm:text-xs">
-              {item.kind === "show" ? "SÉRIE" : "FILM"}
+              {item.kind === "show" ? copy.show : copy.movie}
             </p>
             <h2 className="mt-1 max-w-3xl text-3xl font-bold sm:text-4xl md:text-5xl">{title}</h2>
             <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -152,11 +154,11 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
                   className="inline-flex min-h-11 items-center gap-2 rounded-md bg-white px-5 py-2.5 text-sm font-semibold text-black sm:min-h-12 sm:px-6 sm:text-base"
                 >
                   <IconPlay className="h-4 w-4" />
-                  Lecture
+                  {copy.play}
                 </Link>
               ) : (
                 <span className="inline-flex min-h-11 items-center gap-3 rounded-md bg-white/10 px-5 py-2.5 text-sm">
-                  {loading ? <Spinner className="h-5 w-5" /> : "Lecture indisponible"}
+                  {loading ? <Spinner className="h-5 w-5" /> : copy.playUnavailable}
                 </span>
               )}
               <MyListButton item={listItem} />
@@ -186,7 +188,7 @@ function DetailModal({ item, onClose }: { item: Poster; onClose: () => void }) {
           {item.kind === "show" && detail ? (
             <div className="mt-8">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold">Épisodes</h3>
+                <h3 className="text-lg font-semibold">{copy.episodes}</h3>
                 <div className="-mx-1 flex gap-2 overflow-x-auto px-1 [scrollbar-width:none]">
                   {detail.seasons.map((season) => (
                     <button

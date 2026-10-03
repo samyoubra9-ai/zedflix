@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
+import { parseSiteLang } from "@/lib/locale";
 import { homeCatalog } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
@@ -8,7 +9,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     await requireWebAccount(request);
-    const home = await homeCatalog();
+    const home =
+      parseSiteLang(request.cookies.get("minuit_lang")?.value) === "en"
+        ? await (await import("@/lib/english")).englishHome()
+        : await homeCatalog();
     const part = request.nextUrl.searchParams.get("part");
     if (part === "shelves" || part === "fresh") return seal(request, NextResponse.json({ rows: [] }));
     if (part === "spotlight") return seal(request, NextResponse.json({ hero: home.hero }));

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
+import { parseSiteLang } from "@/lib/locale";
 import { findPlayable, searchAnimeCatalog, searchCatalog, searchMore } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
@@ -17,8 +18,16 @@ export async function GET(request: NextRequest) {
       if (!hit) return seal(request, NextResponse.json({ error: "Pas encore disponible à la lecture" }, { status: 404 }));
       return seal(request, NextResponse.json({ result: hit }));
     }
+    const english = parseSiteLang(request.cookies.get("minuit_lang")?.value) === "en";
     if (request.nextUrl.searchParams.get("tab") === "anime") {
       return seal(request, NextResponse.json({ results: await searchAnimeCatalog(query), people: [] }));
+    }
+    if (english) {
+      if (request.nextUrl.searchParams.get("extra") === "1") {
+        return seal(request, NextResponse.json({ results: [] }));
+      }
+      const { englishSearch } = await import("@/lib/english");
+      return seal(request, NextResponse.json({ results: await englishSearch(query), people: [] }));
     }
     if (request.nextUrl.searchParams.get("extra") === "1") {
       const results = (await searchMore(query)).map(({ source: _source, ...item }) => item);

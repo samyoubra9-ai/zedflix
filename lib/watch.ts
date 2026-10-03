@@ -69,6 +69,38 @@ export async function homeCatalog(): Promise<WatchHome> {
   return value;
 }
 
+const MANGA_ORIGIN = "https://w16.french-manga.net";
+const ANIME_ORIGIN = "https://french-anime.com";
+
+export function isWatchId(id: string) {
+  return (
+    /^\d+$/.test(id) ||
+    /^m-\d+$/.test(id) ||
+    /^a-[a-z0-9][a-z0-9_-]*$/i.test(id) ||
+    /^en-(sc|sx|rd)-[a-z0-9][a-z0-9~_-]*$/i.test(id)
+  );
+}
+
+function animeWatchId(href: string) {
+  const path = href
+    .replace(/^https?:\/\/[^/]+/i, "")
+    .replace(/^\//, "")
+    .replace(/\.html$/i, "")
+    .replace(/\/+$/, "");
+  if (!path || path.includes("..")) return "";
+  return `a-${path.replace(/\//g, "__")}`;
+}
+
+function mangaHeaders() {
+  return {
+    "User-Agent": USER_AGENT,
+    Cookie: "dle_skin=MGM",
+    Referer: `${MANGA_ORIGIN}/`,
+    "Accept-Language": "fr-FR,fr;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+  };
+}
+
 function absUrl(origin: string, src: string) {
   if (!src) return "";
   if (src.startsWith("http")) return src;
@@ -232,9 +264,9 @@ async function animeSiteRows(): Promise<{ hero: WatchCard[]; rows: WatchHomeRow[
       const alt = visibleTitle(item.match(/<img[^>]+alt="([^"]+)"/)?.[1] || "");
       const title = alt.length > shortTitle.length ? alt : shortTitle;
       const poster = absUrl(origin, posterSrc(item));
-      const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+      const id = animeWatchId(href);
       if (!title || !id || !poster) continue;
-      hero.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind: "show" });
+      hero.push({ id, title, poster, overview: "", backdrop: poster, kind: "show" });
     }
     const rows: WatchHomeRow[] = [];
     for (const block of html.split(/class="block-main"/).slice(1)) {
@@ -244,7 +276,7 @@ async function animeSiteRows(): Promise<{ hero: WatchCard[]; rows: WatchHomeRow[
         const href = mov.match(/class="mov-t[^"]*"[^>]*href="([^"]+)"/)?.[1] || "";
         const title = visibleTitle(mov.match(/class="mov-t[^"]*"[^>]*>([^<]+)/)?.[1] || "");
         const poster = absUrl(origin, posterSrc(mov));
-        const id = href.split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+        const id = animeWatchId(href);
         if (!title || !id || !poster) continue;
         const kind: WatchResult["kind"] = /film/i.test(name) ? "movie" : "show";
         items.push({ id: `a-${id}`, title, poster, overview: "", backdrop: poster, kind });
@@ -781,7 +813,179 @@ export async function freshCatalog(): Promise<WatchHomeRow[]> {
   ].filter((row) => row.items.length > 0);
 }
 
+type AnimeBlocks = {
+  vf?: Record<string, Record<string, string>>;
+  vostfr?: Record<string, Record<string, string>>;
+  vo?: Record<string, Record<string, string>>;
+  info?: Record<string, { title?: string; synopsis?: string; poster?: string }>;
+};
+
+async function mangaBlocks(id: string): Promise<AnimeBlocks> {
+  const response = await fetch(
+    `${MANGA_ORIGIN}/engine/ajax/manga_episodes_api.php?id=${encodeURIComponent(id)}`,
+    { headers: mangaHeaders(), cache: "no-store", signal: AbortSignal.timeout(12000) },
+  );
+  if (!response.ok) throw new Error("Animé introuvable");
+  const text = (await response.text()).replace(/^\uFEFF/, "");
+  return JSON.parse(text) as AnimeBlocks;
+}
+
+function episodeNumbers(data: AnimeBlocks) {
+  return [
+    ...new Set([
+      ...Object.keys(data.vf || {}),
+      ...Object.keys(data.vostfr || {}),
+      ...Object.keys(data.vo || {}),
+    ]),
+  ]
+    .map((key) => Number(key))
+    .filter((number) => Number.isInteger(number) && number > 0)
+    .sort((a, b) => a - b);
+}
+
+function episodeList(data: AnimeBlocks) {
+  return episodeNumbers(data).map((number) => ({
+    number,
+    title: data.info?.[String(number)]?.title?.replace(/\\'/g, "'") || `Épisode ${number}`,
+  }));
+}
+
+async function playManga(id: string, episode: number | undefined, options: PlayOptions = {}) {
+  const data = await mangaBlocks(id);
+  const numbers = episodeNumbers(data);
+  const picked = episode && numbers.includes(episode) ? episode : numbers[0];
+  if (!picked) throw new Error("Lecture indisponible pour cet animé");
+  const key = String(picked);
+  const servers = listEpisodeServers(data.vf?.[key], data.vostfr?.[key], data.vo?.[key]);
+  return playFromServers(servers, MANGA_ORIGIN, options);
+}
+
+async function mangaTitle(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
+  const full = `m-${id}`;
+  const [page, data] = await Promise.all([
+    fetch(`${MANGA_ORIGIN}/index.php?newsid=${encodeURIComponent(id)}`, {
+      headers: mangaHeaders(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    }).then((response) => (response.ok ? response.text() : "")),
+    mangaBlocks(id),
+  ]);
+  const title =
+    decodeTitle(page.match(/property="og:title" content="([^"]*)"/)?.[1] || "") ||
+    decodeTitle(page.match(/<h1[^>]*>([^<]+)/)?.[1] || "") ||
+    "Animé";
+  const poster =
+    page.match(/https:\/\/image\.tmdb\.org\/t\/p\/[^"'\s]+/)?.[0] ||
+    data.info?.["1"]?.poster ||
+    "";
+  const overview = data.info?.["1"]?.synopsis || "";
+  const episodes = episodeList(data);
+  const seasonTitle = title.match(/saison\s*\d+/i)?.[0] || "Saison";
+  const card = await withBackdrop({
+    id: full,
+    title,
+    poster,
+    overview,
+    backdrop: poster,
+    kind,
+  });
+  return {
+    ...card,
+    seasons: [{ id: full, title: seasonTitle }],
+    episodes: kind === "show" ? episodes : [],
+    cast: [],
+    genres: [],
+    directors: [],
+    year: "",
+    runtime: "",
+    quality: "",
+  };
+}
+
+function parseAnimeLines(html: string) {
+  const block = html.match(/class="eps"[^>]*>([\s\S]*?)<\/div>/)?.[1] || "";
+  const episodes: { number: number; urls: string[] }[] = [];
+  for (const line of block.trim().split(/\s+/)) {
+    const split = line.indexOf("!");
+    if (split < 1) continue;
+    const number = Number(line.slice(0, split));
+    const urls = line
+      .slice(split + 1)
+      .split(",")
+      .map((url) => url.trim())
+      .filter((url) => url.startsWith("http"));
+    if (Number.isInteger(number) && number > 0 && urls.length) episodes.push({ number, urls });
+  }
+  return episodes.sort((a, b) => a.number - b.number);
+}
+
+async function animePage(key: string) {
+  const path = key.replace(/__/g, "/");
+  const response = await fetch(`${ANIME_ORIGIN}/${path}.html`, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Referer: `${ANIME_ORIGIN}/`,
+      "Accept-Language": "fr-FR,fr;q=0.9",
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error("Animé introuvable");
+  return response.text();
+}
+
+async function playAnimeSite(key: string, episode: number | undefined, options: PlayOptions = {}) {
+  const episodes = parseAnimeLines(await animePage(key));
+  const picked = episodes.find((item) => item.number === episode) || (!episode ? episodes[0] : undefined);
+  if (!picked) throw new Error("Épisode introuvable");
+  const raw = picked.urls.map((src, index) => ({
+    id: `fa${index}`,
+    src,
+    version: "vf" as const,
+    host: "anime",
+  }));
+  return playFromServers(sortServers(assignVersionLabels(raw)), ANIME_ORIGIN, options);
+}
+
+async function animeSiteTitle(key: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
+  const full = `a-${key}`;
+  const html = await animePage(key);
+  const title =
+    decodeTitle(html.match(/property="og:title" content="([^"]*)"/)?.[1] || "") ||
+    decodeTitle(html.match(/<h1[^>]*>([^<]+)/)?.[1] || "") ||
+    "Animé";
+  const episodes = parseAnimeLines(html).map((item) => ({
+    number: item.number,
+    title: `Épisode ${item.number}`,
+  }));
+  const card = await withBackdrop({
+    id: full,
+    title,
+    poster: "",
+    overview: "",
+    backdrop: "",
+    kind,
+  });
+  return {
+    ...card,
+    seasons: [{ id: full, title: "Saison" }],
+    episodes: kind === "show" ? episodes : [],
+    cast: [],
+    genres: [],
+    directors: [],
+    year: "",
+    runtime: "",
+    quality: "",
+  };
+}
+
 export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
+  if (id.startsWith("en-")) {
+    const { englishTitle } = await import("./english");
+    return englishTitle(id, kind);
+  }
+  if (id.startsWith("m-")) return mangaTitle(id.slice(2), kind);
+  if (id.startsWith("a-")) return animeSiteTitle(id.slice(2), kind);
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
   let title = "";
@@ -1024,9 +1228,9 @@ async function searchAnimeSite(query: string, signal?: AbortSignal): Promise<Wat
     const results: WatchResult[] = [];
     for (const match of html.matchAll(/<a class="mov-t"[^>]*href="([^"]+)"[^>]*>([^<]+)/g)) {
       const title = decodeTitle(match[2]);
-      const id = match[1].split("/").filter(Boolean).pop()?.replace(/\.html$/, "") || "";
+      const id = animeWatchId(match[1]);
       if (!title || !id) continue;
-      results.push({ id: `a-${id}`, title, poster: "", kind: /film/i.test(match[1]) ? "movie" : "show" });
+      results.push({ id, title, poster: "", kind: /film/i.test(match[1]) ? "movie" : "show" });
     }
     return uniqueByTitle(results);
   } catch {
@@ -1111,6 +1315,21 @@ function toExternal(title: string, poster: string, kind: WatchResult["kind"], so
 }
 
 export async function showCatalog(id: string) {
+  if (id.startsWith("en-")) {
+    const { englishShow } = await import("./english");
+    return englishShow(id);
+  }
+  if (id.startsWith("m-")) {
+    const data = await mangaBlocks(id.slice(2));
+    return { poster: data.info?.["1"]?.poster || "", seasons: [{ id, title: "Saison" }], episodes: episodeList(data) };
+  }
+  if (id.startsWith("a-")) {
+    const episodes = parseAnimeLines(await animePage(id.slice(2))).map((item) => ({
+      number: item.number,
+      title: `Épisode ${item.number}`,
+    }));
+    return { poster: "", seasons: [{ id, title: "Saison" }], episodes };
+  }
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
   const tag = film.meta?.tagz || "";
@@ -1237,6 +1456,12 @@ type PlayOptions = {
 
 /** Resolve a playable stream: prefer confirmed VF, otherwise ask before English. */
 export async function resolvePlaylist(id: string, options: PlayOptions = {}): Promise<WatchPlayResult> {
+  if (id.startsWith("en-")) {
+    const { englishPlay } = await import("./english");
+    return englishPlay(id, undefined, options.preferredServer);
+  }
+  if (id.startsWith("m-")) return playManga(id.slice(2), undefined, options);
+  if (id.startsWith("a-")) return playAnimeSite(id.slice(2), undefined, options);
   const origin = await catalogOrigin();
   const film = await filmData(origin, id);
   const servers = listMovieServers(film.players || {});
@@ -1254,6 +1479,12 @@ export async function resolveEpisode(
   episode: number,
   options: PlayOptions = {},
 ): Promise<WatchPlayResult> {
+  if (seasonId.startsWith("en-")) {
+    const { englishPlay } = await import("./english");
+    return englishPlay(seasonId, episode, options.preferredServer);
+  }
+  if (seasonId.startsWith("m-")) return playManga(seasonId.slice(2), episode, options);
+  if (seasonId.startsWith("a-")) return playAnimeSite(seasonId.slice(2), episode, options);
   const origin = await catalogOrigin();
   const response = await fetch(`${origin}/engine/ajax/sx.php?id=${encodeURIComponent(seasonId)}`, {
     headers: headers(origin),
@@ -1673,6 +1904,9 @@ export async function fetchMedia(url: string, timeoutMs = 25000) {
     if (host.includes("vavoo") || url.includes("/hls/") || url.includes("sunshine")) {
       referer = "https://vavoo.to/";
       origin = "https://vavoo.to";
+    } else if (host.includes("vixcloud") || host.includes("vix-content")) {
+      referer = "https://vixcloud.co/";
+      origin = "https://vixcloud.co";
     }
   } catch {
     // keep default
@@ -1687,6 +1921,25 @@ export async function fetchMedia(url: string, timeoutMs = 25000) {
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
   });
+}
+
+export function preparePlaylist(body: string, playlistUrl: string) {
+  const rewritten = rewritePlaylist(body, playlistUrl);
+  if (!playlistUrl.includes("vixcloud.co")) return rewritten;
+  let englishDefault = false;
+  const lines = rewritten.split("\n").flatMap((line) => {
+    if (/TYPE=SUBTITLES/i.test(line)) return [];
+    let next = line.replace(/,?SUBTITLES="[^"]*"/gi, "");
+    if (!/TYPE=AUDIO/i.test(next)) return [next];
+    const english = /LANGUAGE="en/i.test(next);
+    const preferred = english && !englishDefault;
+    if (preferred) englishDefault = true;
+    next = next
+      .replace(/DEFAULT=(YES|NO)/i, preferred ? "DEFAULT=YES" : "DEFAULT=NO")
+      .replace(/AUTOSELECT=(YES|NO)/i, preferred ? "AUTOSELECT=YES" : "AUTOSELECT=NO");
+    return [next];
+  });
+  return lines.join("\n");
 }
 
 export function rewritePlaylist(body: string, playlistUrl: string) {

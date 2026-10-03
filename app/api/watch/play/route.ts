@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
-import { EnglishChoiceNeededError, mediaPath, resolveEpisode, resolvePlaylist } from "@/lib/watch";
+import { EnglishChoiceNeededError, isWatchId, mediaPath, resolveEpisode, resolvePlaylist } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const episode = Number(request.nextUrl.searchParams.get("episode") || "");
     const server = request.nextUrl.searchParams.get("server")?.trim() || undefined;
     const allowEnglish = request.nextUrl.searchParams.get("allowEnglish") === "1";
-    if (!/^\d+$/.test(id)) {
+    if (!isWatchId(id)) {
       return seal(request, NextResponse.json({ error: "Titre introuvable" }, { status: 400 }));
     }
     const options = { preferredServer: server, allowEnglish };

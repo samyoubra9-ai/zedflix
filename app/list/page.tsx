@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AccountGate, SiteNav } from "@/components/account";
+import { useCopy } from "@/components/locale";
 import { Poster, PosterGrid } from "@/components/posters";
 import { listMyList } from "@/lib/my-list";
 
@@ -14,6 +15,7 @@ export default function MyListPage() {
 }
 
 function MyList() {
+  const copy = useCopy();
   const [items, setItems] = useState<Poster[]>([]);
 
   useEffect(() => {
@@ -32,7 +34,7 @@ function MyList() {
   return (
     <main className="min-h-screen bg-black px-4 pb-28 pt-20 text-white sm:px-8 sm:pb-16 sm:pt-24 md:px-12">
       <SiteNav />
-      <h1 className="text-3xl font-bold sm:text-4xl">Ma liste</h1>
+      <h1 className="text-3xl font-bold sm:text-4xl">{copy.list}</h1>
       <p className="mt-2 text-sm text-zinc-400">
         {items.length ? `${items.length} titre${items.length > 1 ? "s" : ""}` : "Ajoute des titres avec le bouton +"}
       </p>

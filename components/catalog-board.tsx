@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { SiteNav, rememberCatalogTab, type CatalogTab } from "@/components/account";
+import { useCopy } from "@/components/locale";
 import { ContinueWatching } from "@/components/continue-watching";
 import { useOpenDetail } from "@/components/detail";
 import { IconInfo, IconPlay } from "@/components/icons";
@@ -31,6 +32,7 @@ export function CatalogBoard({
   const [fade, setFade] = useState(true);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("");
+  const copy = useCopy();
   const openDetail = useOpenDetail();
   const open = onOpen || openDetail;
 
@@ -45,7 +47,7 @@ export function CatalogBoard({
         const data = (await response.json()) as { hero?: HeroCard[]; rows?: Row[]; error?: string };
         if (stop) return;
         if (!response.ok) {
-          setStatus(data.error || "Catalogue indisponible");
+          setStatus(data.error || copy.catalogDown);
           setReady(true);
           return;
         }
@@ -59,7 +61,7 @@ export function CatalogBoard({
       })
       .catch(() => {
         if (!stop) {
-          setStatus("Catalogue indisponible");
+          setStatus(copy.catalogDown);
           setReady(true);
         }
       });

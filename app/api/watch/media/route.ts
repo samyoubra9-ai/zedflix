@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
-import { allowedMediaUrl, fetchMedia, rewritePlaylist } from "@/lib/watch";
+import { allowedMediaUrl, fetchMedia, preparePlaylist } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
   if (!allowedMediaUrl(url)) {
     return NextResponse.json({ error: "Adresse refusée" }, { status: 400 });
   }
-  const playlistUrl = url.includes(".m3u8");
+  const playlistUrl = url.includes(".m3u8") || url.includes("/playlist/");
   let upstream: Response;
   try {
     const liveFile = !playlistUrl && (url.includes("/hls/") || url.includes("sunshine"));
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   const playlist = playlistUrl || type.includes("mpegurl") || type.includes("mpegURL");
   const length = upstream.headers.get("content-length");
   const response = playlist
-    ? new NextResponse(rewritePlaylist(await upstream.text(), url), {
+    ? new NextResponse(preparePlaylist(await upstream.text(), url), {
         headers: {
           "Content-Type": "application/vnd.apple.mpegurl",
           "Cache-Control": "no-store",
@@ -48,7 +48,12 @@ export async function GET(request: NextRequest) {
       })
     : new NextResponse(upstream.body, {
         headers: {
-          "Content-Type": type || "video/mp2t",
+          "Content-Type":
+            type.includes("text/html") || type.includes("text/plain")
+              ? url.includes(".ts")
+                ? "video/mp2t"
+                : "video/mp4"
+              : type || "video/mp2t",
           "Cache-Control": "no-store",
           ...(length ? { "Content-Length": length } : {}),
         },

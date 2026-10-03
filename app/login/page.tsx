@@ -3,6 +3,7 @@
 import { FormEvent, Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { rememberWebSession } from "@/components/account";
+import { LanguageSwitch, useCopy } from "@/components/locale";
 import { IconAndroid, IconTv } from "@/components/icons";
 import { TELEGRAM_ESSAI_URL } from "@/lib/telegram-public";
 
@@ -16,16 +17,17 @@ export default function LoginPage() {
 
 function LoginForm() {
   const search = useSearchParams();
+  const copy = useCopy();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [status, setStatus] = useState(
-    search.get("expired") === "1" ? "Session expirée — reconnecte-toi." : "",
+    search.get("expired") === "1" ? copy.sessionExpired : "",
   );
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    setStatus("Connexion…");
+    setStatus(copy.signingIn);
     const response = await fetch("/auth/web/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -34,7 +36,7 @@ function LoginForm() {
     });
     const data = (await response.json()) as { email?: string; error?: string };
     if (!response.ok) {
-      setStatus(data.error || "Connexion impossible");
+      setStatus(data.error || copy.loginFailed);
       return;
     }
     rememberWebSession(data.email || email.trim().toLowerCase());
@@ -49,6 +51,7 @@ function LoginForm() {
       <header className="relative z-10 flex items-center px-5 py-5 sm:px-8">
         <img src="/mark.png" alt="" className="h-9 w-9 rounded-xl sm:h-10 sm:w-10" />
         <span className="ml-3 text-sm font-semibold tracking-[0.22em]">MINUIT</span>
+        <LanguageSwitch className="ml-auto" />
       </header>
 
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-5 pb-8 sm:px-6">
@@ -56,8 +59,8 @@ function LoginForm() {
           onSubmit={onSubmit}
           className="w-full max-w-md rounded-2xl border border-white/10 bg-black/50 p-5 shadow-2xl backdrop-blur sm:p-8"
         >
-          <h1 className="text-2xl font-semibold sm:text-3xl">Connexion</h1>
-          <p className="mt-2 text-sm text-zinc-400">Accède à ton catalogue Minuit.</p>
+          <h1 className="text-2xl font-semibold sm:text-3xl">{copy.login}</h1>
+          <p className="mt-2 text-sm text-zinc-400">{copy.loginHint}</p>
           <input
             type="email"
             value={email}
@@ -70,7 +73,7 @@ function LoginForm() {
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder="Mot de passe"
+            placeholder={copy.password}
             autoComplete="current-password"
             className="mt-3 h-12 w-full rounded-lg bg-zinc-900 px-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
           />
@@ -81,24 +84,24 @@ function LoginForm() {
               onChange={(event) => setRemember(event.target.checked)}
               className="h-4 w-4 rounded border-white/20 bg-zinc-900"
             />
-            Se souvenir de moi
+            {copy.remember}
           </label>
           <button
             type="submit"
             className="mt-6 h-12 w-full rounded-lg bg-red-600 font-semibold transition hover:bg-red-500"
           >
-            Entrer
+            {copy.enter}
           </button>
           {status ? <p className="mt-4 text-sm text-zinc-300">{status}</p> : null}
           <p className="mt-5 text-center text-sm text-zinc-500">
-            Pas de compte ?{" "}
+            {copy.noAccount}{" "}
             <a
               href={TELEGRAM_ESSAI_URL}
               target="_blank"
               rel="noreferrer"
               className="font-medium text-white underline decoration-white/30 underline-offset-4 hover:decoration-white"
             >
-              Demander un essai 3&nbsp;jours
+              {copy.trial}
             </a>
           </p>
         </form>
@@ -122,7 +125,7 @@ function LoginForm() {
           </a>
         </div>
         <p className="mx-auto mt-2 max-w-md text-center text-[11px] text-zinc-500">
-          Téléphone / tablette · Box &amp; Smart TV Android
+          {copy.devices}
         </p>
       </footer>
     </main>

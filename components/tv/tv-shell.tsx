@@ -13,6 +13,7 @@ import {
   IconSwitch,
   IconTv,
 } from "@/components/icons";
+import { LanguageSwitch, useCopy } from "@/components/locale";
 import { TvSpatialNav } from "./spatial-nav";
 
 const NAV = [
@@ -38,6 +39,9 @@ export function TvShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { profile } = useSession();
+  const copy = useCopy();
+  const labelOf = (href: string) =>
+    href === "/browse" ? copy.films : href === "/anime" ? copy.anime : href === "/tv" ? copy.live : href === "/list" ? copy.list : copy.search;
   const [expanded, setExpanded] = useState(false);
 
   async function switchProfile() {
@@ -91,7 +95,7 @@ export function TvShell({ children }: { children: ReactNode }) {
         </button>
 
         <nav className="mt-8 flex flex-1 flex-col gap-1.5 px-3">
-          {NAV.filter(({ href }) => catalogAllowsPath(href, catalogAccessOf(profile))).map(({ href, label, Icon }) => {
+          {NAV.filter(({ href }) => catalogAllowsPath(href, catalogAccessOf(profile))).map(({ href, Icon }) => {
             const isActive = active(pathname, href);
             return (
               <Link
@@ -108,7 +112,7 @@ export function TvShell({ children }: { children: ReactNode }) {
                     expanded ? "opacity-100" : "pointer-events-none w-0 opacity-0"
                   }`}
                 >
-                  {label}
+                  {labelOf(href)}
                 </span>
               </Link>
             );
@@ -116,6 +120,7 @@ export function TvShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="mb-5 flex flex-col gap-1 px-3">
+          <LanguageSwitch className="mb-2 self-start" />
           <button
             type="button"
             data-tv-focus
