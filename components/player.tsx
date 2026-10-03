@@ -33,7 +33,7 @@ type ServerOption = { id: string; label: string; version: "vf" | "vo" | "vostfr"
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const LIVE_RENEW_MS = 210_000;
-const VOD_START_MS = 12_000;
+const VOD_START_MS = 20_000;
 
 function liveHlsConfig() {
   return {

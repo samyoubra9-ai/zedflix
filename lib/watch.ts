@@ -1901,12 +1901,12 @@ export async function fetchMedia(url: string, timeoutMs = 25000) {
     const host = parsed.hostname.toLowerCase();
     referer = `https://${host}/`;
     origin = `https://${host}`;
-    if (host.includes("vavoo") || url.includes("/hls/") || url.includes("sunshine")) {
-      referer = "https://vavoo.to/";
-      origin = "https://vavoo.to";
-    } else if (host.includes("vixcloud") || host.includes("vix-content")) {
+    if (host.includes("vixcloud") || host.includes("vix-content") || host.includes("quickbadger")) {
       referer = "https://vixcloud.co/";
       origin = "https://vixcloud.co";
+    } else if (host.includes("vavoo") || url.includes("/hls/") || url.includes("sunshine")) {
+      referer = "https://vavoo.to/";
+      origin = "https://vavoo.to";
     }
   } catch {
     // keep default

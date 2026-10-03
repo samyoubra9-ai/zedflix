@@ -4,6 +4,25 @@ import { allowedMediaUrl, fetchMedia, preparePlaylist } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "cdg1";
+export const maxDuration = 60;
+
+async function binaryMedia(upstream: Response, type: string, url: string) {
+  const bytes = new Uint8Array(await upstream.arrayBuffer());
+  const contentType =
+    type.includes("text/html") || type.includes("text/plain")
+      ? url.includes(".ts")
+        ? "video/mp2t"
+        : "video/mp4"
+      : type || "video/mp2t";
+  return new NextResponse(bytes, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "no-store",
+      "Content-Length": String(bytes.byteLength),
+    },
+  });
+}
 
 function sessionPresent(request: NextRequest) {
   return Boolean(
@@ -38,7 +57,6 @@ export async function GET(request: NextRequest) {
   }
   const type = upstream.headers.get("content-type") || "";
   const playlist = playlistUrl || type.includes("mpegurl") || type.includes("mpegURL");
-  const length = upstream.headers.get("content-length");
   const response = playlist
     ? new NextResponse(preparePlaylist(await upstream.text(), url), {
         headers: {
@@ -46,17 +64,6 @@ export async function GET(request: NextRequest) {
           "Cache-Control": "no-store",
         },
       })
-    : new NextResponse(upstream.body, {
-        headers: {
-          "Content-Type":
-            type.includes("text/html") || type.includes("text/plain")
-              ? url.includes(".ts")
-                ? "video/mp2t"
-                : "video/mp4"
-              : type || "video/mp2t",
-          "Cache-Control": "no-store",
-          ...(length ? { "Content-Length": length } : {}),
-        },
-      });
+    : await binaryMedia(upstream, type, url);
   return known ? response : seal(request, response);
 }

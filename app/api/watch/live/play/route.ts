@@ -5,6 +5,8 @@ import { mediaPath } from "@/lib/watch";
 import { hasWebSession, requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "cdg1";
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const known = hasWebSession(request);

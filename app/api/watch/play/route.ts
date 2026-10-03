@@ -4,6 +4,8 @@ import { EnglishChoiceNeededError, isWatchId, mediaPath, resolveEpisode, resolve
 import { requireWebAccount, seal } from "@/lib/web-session";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "cdg1";
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
