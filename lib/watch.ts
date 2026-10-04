@@ -2034,7 +2034,7 @@ function decodeXorPayloads(source: string, link: string) {
 function xorDecodePayload(payload: string, host: string) {
   let hash = 0;
   for (const char of host) hash = (hash + char.charCodeAt(0)) & 255;
-  const reversed = Buffer.from(payload, "base64").toString("latin1").split("").reverse().join("");
+  const reversed = atob(payload).split("").reverse().join("");
   let decoded = "";
   for (let index = 0; index < reversed.length; index += 1) {
     const key = (0x3d + index * 89 + hash) & 255;
