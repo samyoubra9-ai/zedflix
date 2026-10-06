@@ -234,3 +234,11 @@ export function IconList({ className = "h-5 w-5" }: { className?: string }) {
     </svg>
   );
 }
+
+export function IconMoon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M15.5 3.5a8.5 8.5 0 1 0 5 13.2A7.2 7.2 0 0 1 15.5 3.5Z" strokeLinejoin="round" />
+    </svg>
+  );
+}

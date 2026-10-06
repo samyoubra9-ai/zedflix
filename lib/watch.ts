@@ -77,7 +77,8 @@ export function isWatchId(id: string) {
     /^\d+$/.test(id) ||
     /^m-\d+$/.test(id) ||
     /^a-[a-z0-9][a-z0-9_-]*$/i.test(id) ||
-    /^en-(sc|sx|rd)-[a-z0-9][a-z0-9~_-]*$/i.test(id)
+    /^en-(sc|sx|rd)-[a-z0-9][a-z0-9~_-]*$/i.test(id) ||
+    /^tr-[ms]-[A-Za-z0-9_-]+$/.test(id)
   );
 }
 
@@ -980,6 +981,10 @@ async function animeSiteTitle(key: string, kind: WatchResult["kind"]): Promise<W
 }
 
 export async function titleCatalog(id: string, kind: WatchResult["kind"]): Promise<WatchTitle> {
+  if (id.startsWith("tr-")) {
+    const { turkishTitle } = await import("./turkish");
+    return turkishTitle(id);
+  }
   if (id.startsWith("en-")) {
     const { englishTitle } = await import("./english");
     return englishTitle(id, kind);
@@ -1315,6 +1320,10 @@ function toExternal(title: string, poster: string, kind: WatchResult["kind"], so
 }
 
 export async function showCatalog(id: string) {
+  if (id.startsWith("tr-")) {
+    const { turkishShow } = await import("./turkish");
+    return turkishShow(id);
+  }
   if (id.startsWith("en-")) {
     const { englishShow } = await import("./english");
     return englishShow(id);
@@ -1456,6 +1465,10 @@ type PlayOptions = {
 
 /** Resolve a playable stream: prefer confirmed VF, otherwise ask before English. */
 export async function resolvePlaylist(id: string, options: PlayOptions = {}): Promise<WatchPlayResult> {
+  if (id.startsWith("tr-")) {
+    const { turkishPlay } = await import("./turkish");
+    return turkishPlay(id, undefined, options.preferredServer);
+  }
   if (id.startsWith("en-")) {
     const { englishPlay } = await import("./english");
     return englishPlay(id, undefined, options.preferredServer);
@@ -1479,6 +1492,10 @@ export async function resolveEpisode(
   episode: number,
   options: PlayOptions = {},
 ): Promise<WatchPlayResult> {
+  if (seasonId.startsWith("tr-")) {
+    const { turkishPlay } = await import("./turkish");
+    return turkishPlay(seasonId, episode, options.preferredServer);
+  }
   if (seasonId.startsWith("en-")) {
     const { englishPlay } = await import("./english");
     return englishPlay(seasonId, episode, options.preferredServer);
@@ -1893,7 +1910,7 @@ export function allowedMediaUrl(value: string) {
   }
 }
 
-export async function fetchMedia(url: string, timeoutMs = 25000) {
+export async function fetchMedia(url: string, timeoutMs = 25000, extraHeaders?: Record<string, string>) {
   let referer = "https://vidzy.org/";
   let origin = "https://vidzy.org";
   try {
@@ -1904,6 +1921,17 @@ export async function fetchMedia(url: string, timeoutMs = 25000) {
     if (host.includes("vixcloud") || host.includes("vix-content") || host.includes("quickbadger")) {
       referer = "https://vixcloud.co/";
       origin = "https://vixcloud.co";
+    } else if (
+      host.includes("brqz") ||
+      host.includes("cdnplus") ||
+      host.includes("cdnz") ||
+      host.includes("vdesk") ||
+      host.includes("anafast") ||
+      host.includes("vidspeed") ||
+      host.includes("mp4plus")
+    ) {
+      referer = "https://3sk.quest/";
+      origin = "https://3sk.quest";
     } else if (host.includes("vavoo") || url.includes("/hls/") || url.includes("sunshine")) {
       referer = "https://vavoo.to/";
       origin = "https://vavoo.to";
@@ -1917,6 +1945,7 @@ export async function fetchMedia(url: string, timeoutMs = 25000) {
       Referer: referer,
       Origin: origin,
       Accept: "*/*",
+      ...extraHeaders,
     },
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),

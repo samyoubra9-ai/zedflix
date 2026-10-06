@@ -3,6 +3,7 @@ import type { SiteLang } from "./locale";
 const fr = {
   films: "Films & Séries",
   anime: "Animés",
+  turkey: "Turquie",
   live: "TV Live",
   list: "Ma liste",
   search: "Recherche",
@@ -12,6 +13,8 @@ const fr = {
   searchFilm: "Un film ou une série",
   searchAnime: "Un animé",
   searchLive: "Une chaîne",
+  searchTurkey: "Un film ou une série turque",
+  searchHintTurkey: "Cherche un titre turc.",
   searchHintFilm: "Cherche un film ou une série.",
   searchHintAnime: "Cherche un animé.",
   searchHintLive: "Cherche une chaîne.",
@@ -59,6 +62,7 @@ const fr = {
 const en: typeof fr = {
   films: "Movies & Series",
   anime: "Anime",
+  turkey: "Turkey",
   live: "Live TV",
   list: "My List",
   search: "Search",
@@ -68,6 +72,8 @@ const en: typeof fr = {
   searchFilm: "A movie or a series",
   searchAnime: "An anime",
   searchLive: "A channel",
+  searchTurkey: "A Turkish movie or series",
+  searchHintTurkey: "Search for a Turkish title.",
   searchHintFilm: "Search for a movie or a series.",
   searchHintAnime: "Search for an anime.",
   searchHintLive: "Search for a channel.",

@@ -47,7 +47,12 @@ export async function GET(request: NextRequest) {
   let upstream: Response;
   try {
     const liveFile = !playlistUrl && (url.includes("/hls/") || url.includes("sunshine"));
-    upstream = await fetchMedia(url, playlistUrl ? 8000 : liveFile ? 45000 : 25000);
+    const range = request.headers.get("range");
+    upstream = await fetchMedia(
+      url,
+      playlistUrl ? 8000 : liveFile ? 45000 : 25000,
+      range && /\.(mp4|webm|mkv)(\?|$)/i.test(url) ? { Range: range } : undefined,
+    );
   } catch {
     return NextResponse.json({ error: "Le flux n’a pas répondu" }, { status: 502 });
   }
@@ -56,6 +61,19 @@ export async function GET(request: NextRequest) {
   }
   const type = upstream.headers.get("content-type") || "";
   const playlist = playlistUrl || type.includes("mpegurl") || type.includes("mpegURL");
+  const file = !playlist && /\.(mp4|webm|mkv)(\?|$)/i.test(url);
+  if (file) {
+    const headers = new Headers();
+    headers.set("Content-Type", type.startsWith("video/") ? type : "video/mp4");
+    headers.set("Cache-Control", "no-store");
+    headers.set("Accept-Ranges", "bytes");
+    const length = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+    if (length) headers.set("Content-Length", length);
+    if (contentRange) headers.set("Content-Range", contentRange);
+    const response = new NextResponse(upstream.body, { status: upstream.status === 206 ? 206 : 200, headers });
+    return known ? response : seal(request, response);
+  }
   const response = playlist
     ? new NextResponse(preparePlaylist(await upstream.text(), url), {
         headers: {

@@ -22,6 +22,10 @@ export async function GET(request: NextRequest) {
     if (request.nextUrl.searchParams.get("tab") === "anime") {
       return seal(request, NextResponse.json({ results: await searchAnimeCatalog(query), people: [] }));
     }
+    if (request.nextUrl.searchParams.get("tab") === "turkey") {
+      const { turkishSearch } = await import("@/lib/turkish");
+      return seal(request, NextResponse.json({ results: await turkishSearch(query), people: [] }));
+    }
     if (english) {
       if (request.nextUrl.searchParams.get("extra") === "1") {
         return seal(request, NextResponse.json({ results: [] }));

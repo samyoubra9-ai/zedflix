@@ -61,6 +61,15 @@ function liveHlsConfig() {
   };
 }
 
+function directFile(src: string) {
+  try {
+    const file = new URL(src, "https://minuit.local").searchParams.get("url") || src;
+    return /\.(mp4|webm|mkv)(\?|$)/i.test(file);
+  } catch {
+    return false;
+  }
+}
+
 function destroyHls(hls: Hls | null) {
   try {
     hls?.destroy();
@@ -595,7 +604,9 @@ export function Player({
           setQualities(options);
         };
 
-        if (Hls.isSupported()) {
+        if (!live && directFile(data.src)) {
+          video.src = data.src;
+        } else if (Hls.isSupported()) {
           hls = new Hls(
             live
               ? liveHlsConfig()

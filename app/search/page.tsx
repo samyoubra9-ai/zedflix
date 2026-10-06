@@ -38,7 +38,15 @@ function Search() {
   useEffect(() => {
     const current = currentCatalogTab();
     setTab(current);
-    setStatus(current === "anime" ? copy.searchHintAnime : current === "live" ? copy.searchHintLive : copy.searchHintFilm);
+    setStatus(
+      current === "anime"
+        ? copy.searchHintAnime
+        : current === "live"
+          ? copy.searchHintLive
+          : current === "turkey"
+            ? copy.searchHintTurkey
+            : copy.searchHintFilm,
+    );
   }, []);
 
   async function openItem(item: Poster) {
@@ -80,7 +88,7 @@ function Search() {
     setNotice("");
     setCanRetry(false);
     try {
-      const tabQuery = tab === "anime" ? "&tab=anime" : "";
+      const tabQuery = tab === "anime" ? "&tab=anime" : tab === "turkey" ? "&tab=turkey" : "";
       const response = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}${tabQuery}`, {
         signal: controller.signal,
       });
@@ -97,10 +105,10 @@ function Search() {
       }
       const primary = data.results || [];
       setItems(primary);
-      setPeople(tab === "anime" ? [] : data.people || []);
+      setPeople(tab === "anime" || tab === "turkey" ? [] : data.people || []);
       setLoading(false);
       setStatus(primary.length || data.people?.length ? "" : copy.noResults);
-      if (tab === "anime" || lang === "en") return;
+      if (tab === "anime" || tab === "turkey" || lang === "en") return;
       try {
         const more = await fetch(`/api/watch/search?q=${encodeURIComponent(q)}&extra=1`, {
           signal: AbortSignal.timeout(8000),
@@ -136,7 +144,15 @@ function Search() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={tab === "anime" ? copy.searchAnime : tab === "live" ? copy.searchLive : copy.searchFilm}
+            placeholder={
+              tab === "anime"
+                ? copy.searchAnime
+                : tab === "live"
+                  ? copy.searchLive
+                  : tab === "turkey"
+                    ? copy.searchTurkey
+                    : copy.searchFilm
+            }
             className="h-12 w-full rounded-lg bg-zinc-900 pl-10 pr-4 outline-none ring-1 ring-white/10 focus:ring-white/25"
           />
         </div>

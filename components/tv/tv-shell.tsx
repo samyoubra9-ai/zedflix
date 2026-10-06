@@ -9,6 +9,7 @@ import {
   IconList,
   IconLive,
   IconLogout,
+  IconMoon,
   IconSearch,
   IconSwitch,
   IconTv,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/search", label: "Recherche", Icon: IconSearch },
   { href: "/browse", label: "Films & Séries", Icon: IconFilm },
   { href: "/anime", label: "Animés", Icon: IconTv },
+  { href: "/turquie", label: "Turquie", Icon: IconMoon },
   { href: "/tv", label: "TV Live", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
 ] as const;
@@ -41,7 +43,17 @@ export function TvShell({ children }: { children: ReactNode }) {
   const { profile } = useSession();
   const copy = useCopy();
   const labelOf = (href: string) =>
-    href === "/browse" ? copy.films : href === "/anime" ? copy.anime : href === "/tv" ? copy.live : href === "/list" ? copy.list : copy.search;
+    href === "/browse"
+      ? copy.films
+      : href === "/anime"
+        ? copy.anime
+        : href === "/turquie"
+          ? copy.turkey
+          : href === "/tv"
+            ? copy.live
+            : href === "/list"
+              ? copy.list
+              : copy.search;
   const [expanded, setExpanded] = useState(false);
 
   async function switchProfile() {

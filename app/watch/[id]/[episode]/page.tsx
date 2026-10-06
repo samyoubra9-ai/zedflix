@@ -9,7 +9,7 @@ export default function WatchEpisodePage() {
   const episode = Number(params.episode);
   return (
     <AccountGate player>
-      <Player id={params.id} episode={episode} back={params.id.startsWith("m-") || params.id.startsWith("a-") ? "/anime" : params.id.startsWith("en-") ? "/browse" : `/series/${params.id}`} />
+      <Player id={params.id} episode={episode} back={params.id.startsWith("tr-") ? "/turquie" : params.id.startsWith("m-") || params.id.startsWith("a-") ? "/anime" : params.id.startsWith("en-") ? "/browse" : `/series/${params.id}`} />
     </AccountGate>
   );
 }

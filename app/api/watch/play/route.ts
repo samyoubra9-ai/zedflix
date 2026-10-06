@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountError } from "@/lib/accounts";
+import { parseSiteLang } from "@/lib/locale";
 import { EnglishChoiceNeededError, isWatchId, mediaPath, resolveEpisode, resolvePlaylist } from "@/lib/watch";
 import { requireWebAccount, seal } from "@/lib/web-session";
 
@@ -21,10 +22,18 @@ export async function GET(request: NextRequest) {
       Number.isInteger(episode) && episode > 0
         ? await resolveEpisode(id, episode, options)
         : await resolvePlaylist(id, options);
+    const english = parseSiteLang(request.cookies.get("minuit_lang")?.value) === "en";
+    const servers =
+      id.startsWith("tr-") && english
+        ? result.servers.map((item, index) => ({
+            ...item,
+            label: index === 0 ? "Server" : `Server ${index + 1}`,
+          }))
+        : result.servers;
     return seal(request, NextResponse.json({
       src: mediaPath(result.stream),
       server: result.server,
-      servers: result.servers,
+      servers,
       language: result.language,
       version: result.version,
     }));

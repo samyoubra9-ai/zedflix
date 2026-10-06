@@ -9,6 +9,7 @@ import {
   IconList,
   IconLive,
   IconLogout,
+  IconMoon,
   IconSearch,
   IconSettings,
   IconSwitch,
@@ -51,7 +52,7 @@ export function catalogHome(access: CatalogAccess) {
   return access === "live" ? "/tv" : "/browse";
 }
 
-export type CatalogTab = "stream" | "anime" | "live";
+export type CatalogTab = "stream" | "anime" | "live" | "turkey";
 
 export function rememberCatalogTab(tab: CatalogTab) {
   try {
@@ -64,7 +65,7 @@ export function rememberCatalogTab(tab: CatalogTab) {
 export function currentCatalogTab(): CatalogTab {
   try {
     const value = sessionStorage.getItem("minuit_catalog");
-    if (value === "anime" || value === "live" || value === "stream") return value;
+    if (value === "anime" || value === "live" || value === "stream" || value === "turkey") return value;
   } catch {
     /* private mode */
   }
@@ -334,6 +335,7 @@ export function AccountGate({
 const LINKS = [
   { href: "/browse", label: "Films & Séries", Icon: IconFilm },
   { href: "/anime", label: "Animés", Icon: IconTv },
+  { href: "/turquie", label: "Turquie", Icon: IconMoon },
   { href: "/tv", label: "TV Live", Icon: IconLive },
   { href: "/list", label: "Ma liste", Icon: IconList },
   { href: "/search", label: "Recherche", Icon: IconSearch },
@@ -398,7 +400,17 @@ export function SiteNav() {
 
   const access = catalogAccessOf(profile);
   const labelOf = (href: string) =>
-    href === "/browse" ? copy.films : href === "/anime" ? copy.anime : href === "/tv" ? copy.live : href === "/list" ? copy.list : copy.search;
+    href === "/browse"
+      ? copy.films
+      : href === "/anime"
+        ? copy.anime
+        : href === "/turquie"
+          ? copy.turkey
+          : href === "/tv"
+            ? copy.live
+            : href === "/list"
+              ? copy.list
+              : copy.search;
   const links = LINKS.filter((link) => catalogAllowsPath(link.href, access));
   const desktopLinks = links.filter((link) => link.href !== "/search");
 
