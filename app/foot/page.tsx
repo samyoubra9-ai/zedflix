@@ -24,7 +24,7 @@ export default async function FootPage() {
       <header className="mb-8">
         <h1 className="text-3xl font-semibold tracking-tight">Foot</h1>
         <p className="mt-2 max-w-md text-sm text-zinc-400">
-          Les chaînes où passer le foot. Tu en choisis une.
+          beIN Arab en premier, puis les chaînes françaises. Tu en choisis une.
         </p>
       </header>
       {failed ? (

@@ -10,6 +10,7 @@ export type FootChannel = { key: string; name: string };
 export type FootGroup = { label: string; channels: FootChannel[] };
 
 const GROUP_ORDER = [
+  "beIN Arab",
   "L'Équipe",
   "Chaînes",
   "beIN Sports",
@@ -19,6 +20,23 @@ const GROUP_ORDER = [
   "RMC Sport",
   "Ligue 1",
   "Sport",
+];
+
+const ARAB_SLOTS = [
+  "bein sports 1",
+  "bein sports 2",
+  "bein sports 3",
+  "bein sports 4",
+  "bein sports 5",
+  "bein sports 6",
+  "bein sports 7",
+  "bein sports 8",
+  "bein sports 9",
+  "bein sports premium 1",
+  "bein sports premium 2",
+  "bein sports premium 3",
+  "bein sports news",
+  "bein sports nba",
 ];
 
 const SEARCHES = ["beIN", "DAZN", "EUROSPORT", "RMC SPORT", "CANAL+", "L EQUIPE", "TF1", "LIGUE", "M6", "FRANCE 2"];
@@ -59,6 +77,7 @@ function channelKey(raw: string) {
 }
 
 function dropped(key: string) {
+  if (key.startsWith("arab ")) return false;
   if (!key) return true;
   if (key.startsWith("tf1 series")) return true;
   if (key === "m6 music" || key === "m6 international") return true;
@@ -92,6 +111,15 @@ function pretty(key: string, label: string) {
     m6: "M6",
     "france 2": "France 2",
   };
+  if (key.startsWith("arab bein sports premium ")) {
+    return `beIN Sports Premium ${key.slice("arab bein sports premium ".length)}`;
+  }
+  if (key.startsWith("arab bein sports ")) {
+    const rest = key.slice("arab bein sports ".length);
+    if (rest === "news") return "beIN Sports News";
+    if (rest === "nba") return "beIN Sports NBA";
+    return `beIN Sports ${rest}`;
+  }
   if (known[key]) return known[key];
   return label
     .replace(/\bBEIN SPORTS\b/g, "beIN Sports")
@@ -105,6 +133,7 @@ function pretty(key: string, label: string) {
 }
 
 function family(key: string) {
+  if (key.startsWith("arab bein")) return "beIN Arab";
   if (key.startsWith("l equipe")) return "L'Équipe";
   if (key === "tf1" || key === "m6" || key === "france 2") return "Chaînes";
   if (key.startsWith("bein")) return "beIN Sports";
@@ -182,6 +211,29 @@ async function catalog(search: string, group: string, cursor: number | null) {
   };
 }
 
+function arabSlot(raw: string) {
+  const key = channelKey(raw);
+  if (/\b(backup|hevc|h265|local|french|english|afc|xtra|extra|ultra|hq|low|premiem|global|source)\b/.test(key)) {
+    return null;
+  }
+  const swapped = key.match(/^bein sports (\d+) premium$/);
+  const slot = swapped ? `bein sports premium ${swapped[1]}` : key;
+  return ARAB_SLOTS.includes(slot) ? slot : null;
+}
+
+async function collectArabia(): Promise<Hit[]> {
+  const page = await catalog("bein sports", "Arabia", null);
+  const hits: Hit[] = [];
+  for (const item of page.items) {
+    const raw = item.name?.trim() || "";
+    const url = item.url?.trim() || "";
+    const score = scoreOf(raw);
+    if (!arabSlot(raw) || !url.startsWith("http") || score <= 0) continue;
+    hits.push({ name: raw, url, score });
+  }
+  return hits;
+}
+
 async function collect(): Promise<Hit[]> {
   const jobs = SEARCHES.map((search) => catalog(search, "France", null));
   const sport: Array<{ name?: string; url?: string }> = [];
@@ -208,9 +260,20 @@ async function collect(): Promise<Hit[]> {
 async function entries(): Promise<Entry[]> {
   if (cache && Date.now() - cache.at < 3 * 60 * 1000) return cache.entries;
   const map = new Map<string, Entry>();
-  for (const hit of await collect()) {
+  const french = await collect();
+  const arab = await collectArabia();
+  for (const hit of french) {
     const key = channelKey(hit.name);
     if (dropped(key)) continue;
+    const name = pretty(key, cleaned(hit.name));
+    const current = map.get(key) || { key, name, urls: [] };
+    if (!current.urls.some((item) => item.url === hit.url)) current.urls.push(hit);
+    map.set(key, current);
+  }
+  for (const hit of arab) {
+    const slot = arabSlot(hit.name);
+    if (!slot) continue;
+    const key = `arab ${slot}`;
     const name = pretty(key, cleaned(hit.name));
     const current = map.get(key) || { key, name, urls: [] };
     if (!current.urls.some((item) => item.url === hit.url)) current.urls.push(hit);
@@ -234,10 +297,17 @@ export async function listFootGroups(): Promise<FootGroup[]> {
     list.push({ key: entry.key, name: entry.name });
     buckets.set(label, list);
   }
-  return GROUP_ORDER.filter((label) => buckets.has(label)).map((label) => ({
-    label,
-    channels: buckets.get(label) || [],
-  }));
+  const arabRank = new Map(ARAB_SLOTS.map((slot, index) => [`arab ${slot}`, index]));
+  return GROUP_ORDER.filter((label) => buckets.has(label)).map((label) => {
+    const channels = buckets.get(label) || [];
+    if (label !== "beIN Arab") return { label, channels };
+    return {
+      label,
+      channels: [...channels].sort(
+        (a, b) => (arabRank.get(a.key) ?? 99) - (arabRank.get(b.key) ?? 99),
+      ),
+    };
+  });
 }
 
 export async function openFootChannel(key: string) {
